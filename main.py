@@ -1,7 +1,10 @@
-# bot.py
+# combined.py
 
+import os
 import logging
 import re
+import threading
+from flask import Flask
 from telegram import Update, Poll
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,18 +13,41 @@ from telegram.ext import (
     CommandHandler,
     filters,
 )
+
 from allowed_users import ALLOWED_USER_IDS
 
-# Enable logging
+# ----------------------
+# Configure Logging
+# ----------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO  # Set to INFO or DEBUG for detailed logs
 )
-
 logger = logging.getLogger(__name__)
 
-# Your bot token from BotFather
-TOKEN = 'YOUR_BOT_TOKEN_HERE'  # Replace with your actual bot token
+# ----------------------
+# Flask App Setup
+# ----------------------
+app = Flask(__name__)
+
+@app.route('/')
+def hello_world():
+    logger.info("Received request on '/' route")
+    return 'unicornguardian'
+
+def run_flask():
+    """
+    Runs the Flask app. Intended to run in a separate thread.
+    """
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(host='0.0.0.0', port=port)
+
+# ----------------------
+# Telegram Bot Setup
+# ----------------------
+# Retrieve the bot token from environment variables
+TOKEN = os.environ.get('7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok') or "7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok"
 
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS
@@ -36,7 +62,7 @@ def parse_mcq(text):
     b) [Option B]
     c) [Option C]
     d) [Option D]
-    Correct Answer: [option letter])
+    Correct Answer: [option letter]
     Explanation: [Explanation text]
     """
     try:
@@ -126,16 +152,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Welcome to the MCQ Bot!")
 
-def main():
-    application = ApplicationBuilder().token(TOKEN).build()
+def run_bot():
+    """
+    Runs the Telegram bot. Intended to run in the main thread.
+    """
+    try:
+        application = ApplicationBuilder().token(TOKEN).build()
 
-    # Add handlers
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+        # Add handlers
+        application.add_handler(CommandHandler('start', start))
+        application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    # Start the bot
-    logger.info("Bot started...")
-    application.run_polling()
+        # Start the bot
+        logger.info("Bot started...")
+        application.run_polling()
+    except Exception as e:
+        logger.error(f"Error running bot: {e}")
 
+# ----------------------
+# Main Execution
+# ----------------------
 if __name__ == '__main__':
-    main()
+    # Start Flask app in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # Run Telegram bot in the main thread
+    run_bot()

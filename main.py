@@ -1,4 +1,7 @@
-import os
+
+
+# bot.py
+
 import logging
 import re
 from telegram import Update, Poll
@@ -19,8 +22,8 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Retrieve the bot token from environment variables
-TOKEN = os.environ.get('7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok')
+# Your bot token from BotFather
+TOKEN = "7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok"
 
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS
@@ -35,7 +38,7 @@ def parse_mcq(text):
     b) [Option B]
     c) [Option C]
     d) [Option D]
-    Correct Answer: [option letter]
+    Correct Answer: [option letter])
     Explanation: [Explanation text]
     """
     try:

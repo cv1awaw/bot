@@ -1,5 +1,3 @@
-
-
 # bot.py
 
 import logging
@@ -23,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Your bot token from BotFather
-TOKEN = "7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok"
+TOKEN = 'YOUR_BOT_TOKEN_HERE'  # Replace with your actual bot token
 
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS

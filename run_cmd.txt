@@ -1,1 +1,1 @@
-python3 combined.py
+python3 main.py

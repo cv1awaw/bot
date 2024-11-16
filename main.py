@@ -23,7 +23,24 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Your bot token from BotFather
-TOKEN = "7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok"
+TOKEN = os.environ.get('7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok')
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text('Hello! I am your bot.')
+
+def main():
+    if not TOKEN:
+        print("Error: BOT_TOKEN environment variable not set.")
+        return
+
+    application = ApplicationBuilder().token(TOKEN).build()
+
+    start_handler = CommandHandler('start', start)
+    application.add_handler(start_handler)
+
+    application.run_polling()
+
+
 
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS

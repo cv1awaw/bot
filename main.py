@@ -47,11 +47,13 @@ def run_flask():
 # Telegram Bot Setup
 # ----------------------
 # Retrieve the bot token from environment variables
-TOKEN = os.environ.get('7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok')
+TOKEN = os.environ.get('BOT_TOKEN')
 
 if not TOKEN:
     logger.error("BOT_TOKEN environment variable not set.")
     exit(1)
+else:
+    logger.info("BOT_TOKEN successfully retrieved.")
 
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS

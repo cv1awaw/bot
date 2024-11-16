@@ -1,4 +1,5 @@
-Flask==1.1.2
+pyrogram
+Flask==2.2.2
 gunicorn==20.1.0
-werkzeug==2.0.2
-python-telegram-bot==20.3  # Add the appropriate version for your bot
+aiohttp==3.8.1
+pymongo[srv]==3.12.3

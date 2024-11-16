@@ -1,4 +1,4 @@
-# combined.py
+# main.py
 
 import os
 import logging
@@ -21,7 +21,7 @@ from allowed_users import ALLOWED_USER_IDS
 # ----------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Set to INFO or DEBUG for detailed logs
+    level=logging.INFO  # Change to DEBUG for more detailed logs during troubleshooting
 )
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,11 @@ def run_flask():
 # Telegram Bot Setup
 # ----------------------
 # Retrieve the bot token from environment variables
-TOKEN = os.environ.get('7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok') or "7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok"
+TOKEN = os.environ.get('7253743900:AAFZi1boPE6wMdk0J2aYSKyae-dRNEai0ok')
+
+if not TOKEN:
+    logger.error("BOT_TOKEN environment variable not set.")
+    exit(1)
 
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS
@@ -101,31 +105,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_authorized(user_id):
+        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
         await update.message.reply_text("@iwanna2die : hey leave my bot alone")
         return
 
     text = update.message.text
 
+    logger.debug(f"Received message from user {user_id}: {text}")
+
     # Parse the MCQ
     question, options, correct_option_index, explanation = parse_mcq(text)
 
     if not question or not options or correct_option_index is None:
+        logger.warning(f"Invalid MCQ format from user {user_id}")
         await update.message.reply_text("Invalid MCQ format. Please check and try again.")
         return
 
     # Ensure options do not exceed 100 characters
     for option in options:
         if len(option) > 100:
+            logger.warning(f"Option exceeds 100 characters: {option}")
             await update.message.reply_text("Each option must be under 100 characters. Please shorten your options.")
             return
 
     # Ensure question does not exceed 300 characters
     if len(question) > 300:
+        logger.warning(f"Question exceeds 300 characters: {question}")
         await update.message.reply_text("The question must be under 300 characters. Please shorten your question.")
         return
 
     # Ensure explanation does not exceed 200 characters
     if explanation and len(explanation) > 200:
+        logger.warning(f"Explanation exceeds 200 characters: {explanation}")
         await update.message.reply_text("The explanation must be under 200 characters. Please shorten your explanation.")
         return
 
@@ -147,9 +158,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_authorized(user_id):
+        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
         await update.message.reply_text("@iwanna2die : hey leave my bot alone")
         return
 
+    logger.info(f"User {user_id} initiated /start")
     await update.message.reply_text("Welcome to the MCQ Bot!")
 
 def run_bot():
@@ -168,6 +181,17 @@ def run_bot():
         application.run_polling()
     except Exception as e:
         logger.error(f"Error running bot: {e}")
+
+# ----------------------
+# Graceful Shutdown Handling
+# ----------------------
+def shutdown(signum, frame):
+    logger.info("Received shutdown signal. Shutting down gracefully...")
+    os._exit(0)
+
+import signal
+signal.signal(signal.SIGINT, shutdown)
+signal.signal(signal.SIGTERM, shutdown)
 
 # ----------------------
 # Main Execution

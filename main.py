@@ -4,6 +4,7 @@ import os
 import logging
 import re
 import threading
+import random  # Added for random message selection
 from flask import Flask
 from telegram import Update, Poll
 from telegram.ext import (
@@ -61,8 +62,10 @@ def is_authorized(user_id):
 def parse_mcq(text):
     """
     Parses the MCQ text and returns question, options, correct option index, and explanation.
-    Assumes that the MCQ is in the following format with line breaks:
-
+    Supports both Shape 1 (multi-line) and Shape 2 (single-line) formats.
+    
+    Shape 1:
+    
     Question: [question text]
     a) [Option A]
     b) [Option B]
@@ -70,29 +73,60 @@ def parse_mcq(text):
     d) [Option D]
     Correct Answer: [option letter]
     Explanation: [Explanation text]
+    
+    Shape 2:
+    
+    Question: [question text] a) [Option A] b) [Option B] c) [Option C] d) [Option D] Correct Answer: [option letter] Explanation: [Explanation text]
     """
     try:
-        # Split the text into lines and strip whitespace
-        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
+        # Determine if the text is multi-line or single-line
+        if '\n' in text.strip():
+            lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
+        else:
+            # Split by space but keep option letters with their texts
+            # Use regex to split at option letters
+            pattern = r'(a\)|b\)|c\)|d\))'
+            parts = re.split(pattern, text)
+            # Reconstruct lines
+            lines = []
+            for i in range(0, len(parts)-1, 2):
+                prefix = parts[i].strip()
+                option = parts[i+1].strip()
+                if prefix.lower() in ['a)', 'b)', 'c)', 'd)']:
+                    lines.append(f"{prefix} {option}")
+                else:
+                    # Handle other lines like Question, Correct Answer, Explanation
+                    # Split based on known prefixes
+                    sub_parts = re.split(r'(Question:|Correct Answer:|Explanation:)', prefix)
+                    # Remove empty strings
+                    sub_parts = [sp for sp in sub_parts if sp]
+                    for j in range(0, len(sub_parts)-1, 2):
+                        key = sub_parts[j]
+                        value = sub_parts[j+1].strip()
+                        lines.append(f"{key} {value}")
+            # Check if the last part is Explanation or similar
+            if len(parts) % 2 != 0 and parts[-1].strip():
+                lines.append(parts[-1].strip())
+        
         question = ''
         options = []
         correct_option_index = None
         explanation = ''
 
         for line in lines:
-            if line.startswith('Question:'):
+            if line.lower().startswith('question:'):
                 question = line[len('Question:'):].strip()
             elif re.match(r'^[a-dA-D]\)', line):
                 option_text = line[2:].strip()
                 options.append(option_text)
-            elif line.startswith('Correct Answer:'):
+            elif line.lower().startswith('correct answer:'):
                 correct_answer_text = line[len('Correct Answer:'):].strip()
                 # Match the option letter, possibly followed by ')'
                 match = re.match(r'^([a-dA-D])\)?', correct_answer_text)
                 if match:
                     correct_option_letter = match.group(1).lower()
                     correct_option_index = ord(correct_option_letter) - ord('a')
-            elif line.startswith('Explanation:'):
+            elif line.lower().startswith('explanation:'):
                 explanation = line[len('Explanation:'):].strip()
 
         if not question or not options or correct_option_index is None:
@@ -103,12 +137,20 @@ def parse_mcq(text):
         logger.error(f"Error parsing MCQ: {e}")
         return None, None, None, None
 
+# Predefined messages for unauthorized users
+UNAUTHORIZED_MESSAGES = [
+    "@iwanna2die : i can see u , leave my bot",
+    "@iwanna2die : u don't have access to my bot",
+    "@iwanna2die : hey this is my bot leave it"
+]
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        await update.message.reply_text("@iwanna2die : hey leave my bot alone")
+        response = random.choice(UNAUTHORIZED_MESSAGES)
+        await update.message.reply_text(response)
         return
 
     text = update.message.text
@@ -120,7 +162,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not question or not options or correct_option_index is None:
         logger.warning(f"Invalid MCQ format from user {user_id}")
-        await update.message.reply_text("Invalid MCQ format. Please check and try again.")
+        # Respond with Shape 1 format as a reference
+        shape1_example = (
+            "Please use the following MCQ format:\n\n"
+            "Question: [Your question here]\n"
+            "a) [Option A]\n"
+            "b) [Option B]\n"
+            "c) [Option C]\n"
+            "d) [Option D]\n"
+            "Correct Answer: [option letter]\n"
+            "Explanation: [Your explanation here]"
+        )
+        await update.message.reply_text(shape1_example)
         return
 
     # Ensure options do not exceed 100 characters
@@ -161,7 +214,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        await update.message.reply_text("@iwanna2die : hey leave my bot alone")
+        response = random.choice(UNAUTHORIZED_MESSAGES)
+        await update.message.reply_text(response)
         return
 
     logger.info(f"User {user_id} initiated /start")

@@ -13,44 +13,26 @@ from telegram.ext import (
     filters,
 )
 
-# ----------------------
-# Import Allowed Users
-# ----------------------
-# Ensure you have an 'allowed_users.py' file with a list named ALLOWED_USER_IDS
-# Example:
-# ALLOWED_USER_IDS = [123456789, 987654321]
 from allowed_users import ALLOWED_USER_IDS
 
-# ----------------------
 # Configure Logging
-# ----------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Change to DEBUG for more detailed logs during troubleshooting
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ----------------------
 # Initialize Telegram Bot
-# ----------------------
 TOKEN = os.environ.get('BOT_TOKEN')
 
 if not TOKEN:
     logger.error("BOT_TOKEN environment variable not set.")
     exit(1)
-else:
-    logger.info("BOT_TOKEN successfully retrieved.")
 
 bot = Bot(token=TOKEN)
-
-# ----------------------
-# Initialize Telegram Application
-# ----------------------
 application = ApplicationBuilder().token(TOKEN).build()
 
-# ----------------------
 # Predefined Messages for Unauthorized Users
-# ----------------------
 UNAUTHORIZED_MESSAGES = [
     "@iwanna2die : I can see you, leave my bot.",
     "@iwanna2die : You don't have access to my bot.",
@@ -58,92 +40,56 @@ UNAUTHORIZED_MESSAGES = [
 ]
 
 def is_authorized(user_id):
-    """Check if the user is authorized to interact with the bot."""
     return user_id in ALLOWED_USER_IDS
 
 def parse_mcq(text):
-    """
-    Parses the MCQ text and returns question, options, correct option index, and explanation.
-    Supports both Shape 1 (multi-line) and Shape 2 (single-line) formats.
-    """
-    try:
-        # Initialize variables
-        question = ''
-        options = []
-        correct_option_index = None
-        explanation = ''
+    question = ''
+    options = []
+    correct_option_index = None
+    explanation = ''
 
-        # Regular expression patterns
-        question_pattern = r'Question:\s*(.*?)\s*(?=(?:a\)|Correct Answer:|Explanation:|$))'
-        option_pattern = r'([a-dA-D])\)\s*(.*?)\s*(?=[a-dA-D]\)|Correct Answer:|Explanation:|$)'
-        correct_answer_pattern = r'Correct Answer:\s*([a-dA-D])\)'
-        explanation_pattern = r'Explanation:\s*(.*)'
+    # Patterns for Shape 1 and Shape 2
+    shape1_pattern = re.compile(
+        r'Question:\s*(.*?)\s*a\)\s*(.*?)\s*b\)\s*(.*?)\s*c\)\s*(.*?)\s*d\)\s*(.*?)\s*Correct Answer:\s*([a-dA-D])\)\s*Explanation:\s*(.*)',
+        re.IGNORECASE | re.DOTALL
+    )
+    shape2_pattern = re.compile(
+        r'Question:\s*(.*?)\s*a\)\s*(.*?)\s*b\)\s*(.*?)\s*c\)\s*(.*?)\s*d\)\s*(.*?)\s*Correct Answer:\s*([a-dA-D])\)\s*Explanation:\s*(.*)',
+        re.IGNORECASE | re.DOTALL
+    )
 
-        # Extract Question
-        question_match = re.search(question_pattern, text, re.IGNORECASE | re.DOTALL)
-        if question_match:
-            question = question_match.group(1).strip()
-            logger.debug(f"Extracted Question: {question}")
-        else:
-            logger.warning("Question not found in the MCQ.")
-            return None, None, None, None
-
-        # Extract Options
-        options_matches = re.findall(option_pattern, text, re.IGNORECASE | re.DOTALL)
-        if options_matches:
-            for match in options_matches:
-                option_letter = match[0].lower()
-                option_text = match[1].strip()
-                options.append(option_text)
-                logger.debug(f"Extracted Option {option_letter.upper()}: {option_text}")
-        else:
-            logger.warning("Options not found in the MCQ.")
-            return None, None, None, None
-
-        # Extract Correct Answer
-        correct_answer_match = re.search(correct_answer_pattern, text, re.IGNORECASE)
-        if correct_answer_match:
-            correct_option_letter = correct_answer_match.group(1).lower()
-            correct_option_index = ord(correct_option_letter) - ord('a')
-            logger.debug(f"Extracted Correct Answer: {correct_option_letter.upper()}")
-        else:
-            logger.warning("Correct Answer not found in the MCQ.")
-            return None, None, None, None
-
-        # Extract Explanation
-        explanation_match = re.search(explanation_pattern, text, re.IGNORECASE | re.DOTALL)
-        if explanation_match:
-            explanation = explanation_match.group(1).strip()
-            logger.debug(f"Extracted Explanation: {explanation}")
-        else:
-            logger.info("Explanation not found in the MCQ.")
-
+    match = shape1_pattern.match(text)
+    if match:
+        question = match.group(1).strip()
+        options = [match.group(2).strip(), match.group(3).strip(), match.group(4).strip(), match.group(5).strip()]
+        correct_option_letter = match.group(6).lower()
+        correct_option_index = ord(correct_option_letter) - ord('a')
+        explanation = match.group(7).strip()
         return question, options, correct_option_index, explanation
 
-    except Exception as e:
-        logger.error(f"Error parsing MCQ: {e}")
-        return None, None, None, None
+    match = shape2_pattern.match(text)
+    if match:
+        question = match.group(1).strip()
+        options = [match.group(2).strip(), match.group(3).strip(), match.group(4).strip(), match.group(5).strip()]
+        correct_option_letter = match.group(6).lower()
+        correct_option_index = ord(correct_option_letter) - ord('a')
+        explanation = match.group(7).strip()
+        return question, options, correct_option_index, explanation
+
+    return None, None, None, None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming messages and create polls based on MCQ format."""
     user_id = update.effective_user.id
 
     if not is_authorized(user_id):
-        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
         response = random.choice(UNAUTHORIZED_MESSAGES)
         await update.message.reply_text(response)
         return
 
     text = update.message.text
-
-    logger.debug(f"Received message from user {user_id}: {text}")
-
-    # Parse the MCQ
     question, options, correct_option_index, explanation = parse_mcq(text)
 
-    if not question or not options or correct_option_index is None:
-        logger.warning(f"Invalid MCQ format from user {user_id}")
-        # Respond with Shape 1 format as a reference
+    if not all([question, options, correct_option_index is not None, explanation]):
         shape1_example = (
             "Please use the following MCQ format:\n\n"
             "Question: [Your question here]\n"
@@ -157,61 +103,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(shape1_example)
         return
 
-    # Validate Options Length
-    for option in options:
-        if len(option) > 100:
-            logger.warning(f"Option exceeds 100 characters: {option}")
-            await update.message.reply_text("Each option must be under 100 characters. Please shorten your options.")
-            return
-
-    # Validate Question Length
+    # Validate lengths
     if len(question) > 300:
-        logger.warning(f"Question exceeds 300 characters: {question}")
         await update.message.reply_text("The question must be under 300 characters. Please shorten your question.")
         return
-
-    # Validate Explanation Length
-    if explanation and len(explanation) > 200:
-        logger.warning(f"Explanation exceeds 200 characters: {explanation}")
+    for option in options:
+        if len(option) > 100:
+            await update.message.reply_text("Each option must be under 100 characters. Please shorten your options.")
+            return
+    if len(explanation) > 200:
         await update.message.reply_text("The explanation must be under 200 characters. Please shorten your explanation.")
         return
 
-    # Send the poll
     try:
         await update.message.reply_poll(
             question=question,
             options=options,
             type=Poll.QUIZ,
             correct_option_id=correct_option_index,
-            explanation=explanation or None
+            explanation=explanation
         )
-        logger.info(f"Poll sent successfully: {question}")
     except Exception as e:
         logger.error(f"Error sending poll: {e}")
         await update.message.reply_text(f"Failed to send the poll. Error: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /start command."""
     user_id = update.effective_user.id
 
     if not is_authorized(user_id):
-        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
         response = random.choice(UNAUTHORIZED_MESSAGES)
         await update.message.reply_text(response)
         return
 
-    logger.info(f"User {user_id} initiated /start")
     await update.message.reply_text("Welcome to the MCQ Bot! Send me an MCQ in the specified format to create a poll.")
 
-# ----------------------
-# Add Handlers to the Application
-# ----------------------
 application.add_handler(CommandHandler('start', start_command))
 application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-# ----------------------
-# Main Execution for Long Polling
-# ----------------------
 if __name__ == '__main__':
     logger.info("Starting bot with long polling...")
     application.run_polling()

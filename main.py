@@ -4,6 +4,7 @@ import os
 import logging
 import re
 import threading
+import random
 from flask import Flask
 from telegram import Update, Poll
 from telegram.ext import (
@@ -60,20 +61,13 @@ def is_authorized(user_id):
 
 def parse_mcq(text):
     """
-    Parses the MCQ text and returns question, options, correct option index, and explanation.
-    Supports both multi-line and single-line formats.
-
-    Multi-line format:
-        Question: [question text]
-        a) [Option A]
-        b) [Option B]
-        c) [Option C]
-        d) [Option D]
-        Correct Answer: [option letter]
-        Explanation: [Explanation text]
-
-    Single-line format:
-        Question: [question text] a) [Option A] b) [Option B] c) [Option C] d) [Option D] Correct Answer: [option letter]) [Option Text] Explanation: [Explanation text]
+    Parses the single-line MCQ text and returns question, options, correct option index, and explanation.
+    
+    Expected format:
+    Question: [question text] a) [Option A] b) [Option B] c) [Option C] d) [Option D] Correct Answer: [option letter] [Option Text] Explanation: [Explanation text]
+    
+    Example:
+    Question: The sacral promontory contributes to the border of which pelvic structure? a) Pelvic outlet b) Pubic arch c) Pelvic inlet d) Iliac fossa Correct Answer: c) Pelvic inlet Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
     """
     try:
         question = ''
@@ -81,41 +75,25 @@ def parse_mcq(text):
         correct_option_index = None
         explanation = ''
 
-        if '\n' in text:
-            # Multi-line format
-            lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
-            for line in lines:
-                if line.startswith('Question:'):
-                    question = line[len('Question:'):].strip()
-                elif re.match(r'^[a-dA-D]\)', line):
-                    option_text = line[2:].strip()
-                    options.append(option_text)
-                elif line.startswith('Correct Answer:'):
-                    correct_answer_text = line[len('Correct Answer:'):].strip()
-                    # Match the option letter, possibly followed by ') [Option Text]'
-                    match = re.match(r'^([a-dA-D])\)?', correct_answer_text)
-                    if match:
-                        correct_option_letter = match.group(1).lower()
-                        correct_option_index = ord(correct_option_letter) - ord('a')
-                elif line.startswith('Explanation:'):
-                    explanation = line[len('Explanation:'):].strip()
-        else:
-            # Single-line format
-            # Use regex to extract parts
-            question_match = re.search(r'Question:\s*(.*?)\s*(?=a\)|a\))', text, re.IGNORECASE)
-            if question_match:
-                question = question_match.group(1).strip()
+        # Extract the question
+        question_match = re.search(r'Question:\s*(.*?)\s*(?=a\))', text, re.IGNORECASE)
+        if question_match:
+            question = question_match.group(1).strip()
 
-            options = re.findall(r'[a-dA-D]\)\s*([^a-dA-D\)]+)', text)
+        # Extract the options
+        options = re.findall(r'[a-dA-D]\)\s*([^a-dA-D\)]+)', text)
+        options = [option.strip() for option in options]
 
-            correct_answer_match = re.search(r'Correct Answer:\s*([a-dA-D])\)?', text, re.IGNORECASE)
-            if correct_answer_match:
-                correct_option_letter = correct_answer_match.group(1).lower()
-                correct_option_index = ord(correct_option_letter) - ord('a')
+        # Extract the correct answer letter
+        correct_answer_match = re.search(r'Correct Answer:\s*([a-dA-D])\)?', text, re.IGNORECASE)
+        if correct_answer_match:
+            correct_option_letter = correct_answer_match.group(1).lower()
+            correct_option_index = ord(correct_option_letter) - ord('a')
 
-            explanation_match = re.search(r'Explanation:\s*(.*)', text, re.IGNORECASE)
-            if explanation_match:
-                explanation = explanation_match.group(1).strip()
+        # Extract the explanation
+        explanation_match = re.search(r'Explanation:\s*(.*)', text, re.IGNORECASE)
+        if explanation_match:
+            explanation = explanation_match.group(1).strip()
 
         if not question or not options or correct_option_index is None:
             return None, None, None, None
@@ -125,71 +103,80 @@ def parse_mcq(text):
         logger.error(f"Error parsing MCQ: {e}")
         return None, None, None, None
 
+# Predefined messages for unauthorized users
+UNAUTHORIZED_RESPONSES = [
+    "@iwanna2die : leave my bot buddy",
+    "@iwanna2die : if can see u here",
+    "@iwanna2die : this is my bot can u leave it ?",
+    "@iwanba2die : leave my bot alone"
+]
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    text = update.message.text.strip()
 
-    if not is_authorized(user_id):
+    if is_authorized(user_id):
+        logger.debug(f"Authorized user {user_id} sent message: {text}")
+        # Parse the MCQ
+        question, options, correct_option_index, explanation = parse_mcq(text)
+
+        if question and options and correct_option_index is not None:
+            # Validate lengths
+            if len(question) > 300:
+                logger.warning(f"Question exceeds 300 characters: {question}")
+                await update.message.reply_text("The question must be under 300 characters. Please shorten your question.")
+                return
+
+            if any(len(option) > 100 for option in options):
+                logger.warning(f"One or more options exceed 100 characters: {options}")
+                await update.message.reply_text("Each option must be under 100 characters. Please shorten your options.")
+                return
+
+            if explanation and len(explanation) > 200:
+                logger.warning(f"Explanation exceeds 200 characters: {explanation}")
+                await update.message.reply_text("The explanation must be under 200 characters. Please shorten your explanation.")
+                return
+
+            # Send the poll
+            try:
+                await update.message.reply_poll(
+                    question=question,
+                    options=options,
+                    type=Poll.QUIZ,
+                    correct_option_id=correct_option_index,
+                    explanation=explanation or None
+                )
+                logger.info(f"Poll sent successfully by user {user_id}: {question}")
+            except Exception as e:
+                logger.error(f"Error sending poll: {e}")
+                await update.message.reply_text(f"Failed to send the poll. Error: {e}")
+        else:
+            # Invalid MCQ format; send the required format instructions
+            format_instructions = (
+                "Please use the following single-line format to create an MCQ:\n"
+                "Question: [Your question here] "
+                "a) [Option A] b) [Option B] c) [Option C] d) [Option D] "
+                "Correct Answer: [option letter] [Option Text] "
+                "Explanation: [Your explanation here]"
+            )
+            logger.warning(f"Authorized user {user_id} sent an invalid MCQ format.")
+            await update.message.reply_text(format_instructions)
+    else:
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        await update.message.reply_text("@iwanna2die : hey leave my bot alone")
-        return
-
-    text = update.message.text
-
-    logger.debug(f"Received message from user {user_id}: {text}")
-
-    # Parse the MCQ
-    question, options, correct_option_index, explanation = parse_mcq(text)
-
-    if not question or not options or correct_option_index is None:
-        logger.warning(f"Invalid MCQ format from user {user_id}")
-        await update.message.reply_text("Invalid MCQ format. Please check and try again.")
-        return
-
-    # Ensure options do not exceed 100 characters
-    for option in options:
-        if len(option) > 100:
-            logger.warning(f"Option exceeds 100 characters: {option}")
-            await update.message.reply_text("Each option must be under 100 characters. Please shorten your options.")
-            return
-
-    # Ensure question does not exceed 300 characters
-    if len(question) > 300:
-        logger.warning(f"Question exceeds 300 characters: {question}")
-        await update.message.reply_text("The question must be under 300 characters. Please shorten your question.")
-        return
-
-    # Ensure explanation does not exceed 200 characters
-    if explanation and len(explanation) > 200:
-        logger.warning(f"Explanation exceeds 200 characters: {explanation}")
-        await update.message.reply_text("The explanation must be under 200 characters. Please shorten your explanation.")
-        return
-
-    # Send the poll
-    try:
-        poll_message = await update.message.reply_poll(
-            question=question,
-            options=options,
-            type=Poll.QUIZ,
-            correct_option_id=correct_option_index,
-            explanation=explanation or None
-        )
-        logger.info(f"Poll sent successfully: {question}")
-
-        # Optionally, you can pin the poll or perform additional actions here
-    except Exception as e:
-        logger.error(f"Error sending poll: {e}")
-        await update.message.reply_text(f"Failed to send the poll. Error: {e}")
+        response = random.choice(UNAUTHORIZED_RESPONSES)
+        await update.message.reply_text(response)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        await update.message.reply_text("@iwanna2die : hey leave my bot alone")
+        response = random.choice(UNAUTHORIZED_RESPONSES)
+        await update.message.reply_text(response)
         return
 
     logger.info(f"User {user_id} initiated /start")
-    await update.message.reply_text("Welcome to the MCQ Bot!")
+    await update.message.reply_text("Welcome to the MCQ Bot! Send me your MCQs in the specified single-line format.")
 
 def run_bot():
     """

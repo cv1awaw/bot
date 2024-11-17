@@ -4,7 +4,8 @@ import os
 import logging
 import re
 import random
-from telegram import Update, Poll
+import asyncio
+from telegram import Update, Poll, Bot
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,

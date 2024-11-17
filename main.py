@@ -61,41 +61,77 @@ def is_authorized(user_id):
 
 def parse_mcq(text):
     """
-    Parses the single-line MCQ text and returns question, options, correct option index, and explanation.
+    Parses the multi-line MCQ text and returns question, options, correct option index, and explanation.
     
-    Expected format:
-    Question: [question text] a) [Option A] b) [Option B] c) [Option C] d) [Option D] Correct Answer: [option letter] Explanation: [Explanation text]
+    Expected multi-line format:
+        Question: [question text]
+        a) [Option A]
+        b) [Option B]
+        c) [Option C]
+        d) [Option D]
+        Correct Answer: [option letter]
+        Explanation: [Explanation text]
     
     Example:
-    Question: The sacral promontory contributes to the border of which pelvic structure? a) Pelvic outlet b) Pubic arch c) Pelvic inlet d) Iliac fossa Correct Answer: c) Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
+        Question: The sacral promontory contributes to the border of which pelvic structure?
+        a) Pelvic outlet
+        b) Pubic arch
+        c) Pelvic inlet
+        d) Iliac fossa
+        Correct Answer: c)
+        Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
     """
     try:
+        # Split the text into lines and strip whitespace
+        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
         question = ''
         options = []
         correct_option_index = None
         explanation = ''
 
-        # Extract the question
-        question_match = re.search(r'Question:\s*(.*?)\s*(?=a\))', text, re.IGNORECASE)
-        if question_match:
-            question = question_match.group(1).strip()
+        # Define regex patterns
+        question_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
+        option_pattern = re.compile(r'^([a-dA-D])\)\s*(.+)$')
+        correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-dA-D])\)?', re.IGNORECASE)
+        explanation_pattern = re.compile(r'^Explanation:\s*(.+)$', re.IGNORECASE)
 
-        # Extract the options
-        options = re.findall(r'[a-dA-D]\)\s*([^a-dA-D\)]+)', text)
-        options = [option.strip() for option in options]
+        for line in lines:
+            # Match question
+            q_match = question_pattern.match(line)
+            if q_match:
+                question = q_match.group(1).strip()
+                continue
 
-        # Extract the correct answer letter
-        correct_answer_match = re.search(r'Correct Answer:\s*([a-dA-D])\)?', text, re.IGNORECASE)
-        if correct_answer_match:
-            correct_option_letter = correct_answer_match.group(1).lower()
-            correct_option_index = ord(correct_option_letter) - ord('a')
+            # Match options
+            opt_match = option_pattern.match(line)
+            if opt_match:
+                option_letter = opt_match.group(1).lower()
+                option_text = opt_match.group(2).strip()
+                options.append(option_text)
+                continue
 
-        # Extract the explanation
-        explanation_match = re.search(r'Explanation:\s*(.*)', text, re.IGNORECASE)
-        if explanation_match:
-            explanation = explanation_match.group(1).strip()
+            # Match correct answer
+            ca_match = correct_answer_pattern.match(line)
+            if ca_match:
+                correct_option_letter = ca_match.group(1).lower()
+                correct_option_index = ord(correct_option_letter) - ord('a')
+                continue
 
-        if not question or not options or correct_option_index is None:
+            # Match explanation
+            ex_match = explanation_pattern.match(line)
+            if ex_match:
+                explanation = ex_match.group(1).strip()
+                continue
+
+        # Validate parsed data
+        if not question:
+            logger.error("Question not found in the provided MCQ.")
+            return None, None, None, None
+        if len(options) < 2:
+            logger.error("Insufficient options provided in the MCQ.")
+            return None, None, None, None
+        if correct_option_index is None or correct_option_index >= len(options):
+            logger.error("Correct answer index is invalid.")
             return None, None, None, None
 
         return question, options, correct_option_index, explanation
@@ -106,10 +142,22 @@ def parse_mcq(text):
 # Predefined messages for unauthorized users
 UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : leave my bot buddy",
-    "@iwanna2die : i can see u here",
+    "@iwanna2die : if can see u here",
     "@iwanna2die : this is my bot can u leave it ?",
     "@iwanba2die : leave my bot alone"
 ]
+
+# Predefined instruction message for authorized users
+INSTRUCTION_MESSAGE = (
+    "Please use the following multi-line format to create an MCQ:\n\n"
+    "Question: The sacral promontory contributes to the border of which pelvic structure?\n"
+    "a) Pelvic outlet\n"
+    "b) Pubic arch\n"
+    "c) Pelvic inlet\n"
+    "d) Iliac fossa\n"
+    "Correct Answer: c)\n"
+    "Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet."
+)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -152,14 +200,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"Failed to send the poll. Error: {e}")
         else:
             # Invalid MCQ format; send the required format instructions
-            format_instructions = (
-                "Please use the following single-line format to create an MCQ:\n"
-                "Question: [Your question here] "
-                "a) [Option A] b) [Option B] c) [Option C] d) [Option D] "
-                "Correct Answer: [option letter] Explanation: [Your explanation here]"
-            )
             logger.warning(f"Authorized user {user_id} sent an invalid MCQ format.")
-            await update.message.reply_text(format_instructions)
+            await update.message.reply_text(INSTRUCTION_MESSAGE)
     else:
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
         # Select a random response from the predefined list
@@ -177,7 +219,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info(f"User {user_id} initiated /start")
-    await update.message.reply_text("Welcome to the MCQ Bot! Send me your MCQs in the specified single-line format.")
+    await update.message.reply_text("Welcome to the MCQ Bot! Send me your MCQs in the specified multi-line format.")
 
 def run_bot():
     """

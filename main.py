@@ -61,39 +61,61 @@ def is_authorized(user_id):
 def parse_mcq(text):
     """
     Parses the MCQ text and returns question, options, correct option index, and explanation.
-    Assumes that the MCQ is in the following format with line breaks:
+    Supports both multi-line and single-line formats.
 
-    Question: [question text]
-    a) [Option A]
-    b) [Option B]
-    c) [Option C]
-    d) [Option D]
-    Correct Answer: [option letter]
-    Explanation: [Explanation text]
+    Multi-line format:
+        Question: [question text]
+        a) [Option A]
+        b) [Option B]
+        c) [Option C]
+        d) [Option D]
+        Correct Answer: [option letter]
+        Explanation: [Explanation text]
+
+    Single-line format:
+        Question: [question text] a) [Option A] b) [Option B] c) [Option C] d) [Option D] Correct Answer: [option letter]) [Option Text] Explanation: [Explanation text]
     """
     try:
-        # Split the text into lines and strip whitespace
-        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
         question = ''
         options = []
         correct_option_index = None
         explanation = ''
 
-        for line in lines:
-            if line.startswith('Question:'):
-                question = line[len('Question:'):].strip()
-            elif re.match(r'^[a-dA-D]\)', line):
-                option_text = line[2:].strip()
-                options.append(option_text)
-            elif line.startswith('Correct Answer:'):
-                correct_answer_text = line[len('Correct Answer:'):].strip()
-                # Match the option letter, possibly followed by ')'
-                match = re.match(r'^([a-dA-D])\)?', correct_answer_text)
-                if match:
-                    correct_option_letter = match.group(1).lower()
-                    correct_option_index = ord(correct_option_letter) - ord('a')
-            elif line.startswith('Explanation:'):
-                explanation = line[len('Explanation:'):].strip()
+        if '\n' in text:
+            # Multi-line format
+            lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
+            for line in lines:
+                if line.startswith('Question:'):
+                    question = line[len('Question:'):].strip()
+                elif re.match(r'^[a-dA-D]\)', line):
+                    option_text = line[2:].strip()
+                    options.append(option_text)
+                elif line.startswith('Correct Answer:'):
+                    correct_answer_text = line[len('Correct Answer:'):].strip()
+                    # Match the option letter, possibly followed by ') [Option Text]'
+                    match = re.match(r'^([a-dA-D])\)?', correct_answer_text)
+                    if match:
+                        correct_option_letter = match.group(1).lower()
+                        correct_option_index = ord(correct_option_letter) - ord('a')
+                elif line.startswith('Explanation:'):
+                    explanation = line[len('Explanation:'):].strip()
+        else:
+            # Single-line format
+            # Use regex to extract parts
+            question_match = re.search(r'Question:\s*(.*?)\s*(?=a\)|a\))', text, re.IGNORECASE)
+            if question_match:
+                question = question_match.group(1).strip()
+
+            options = re.findall(r'[a-dA-D]\)\s*([^a-dA-D\)]+)', text)
+
+            correct_answer_match = re.search(r'Correct Answer:\s*([a-dA-D])\)?', text, re.IGNORECASE)
+            if correct_answer_match:
+                correct_option_letter = correct_answer_match.group(1).lower()
+                correct_option_index = ord(correct_option_letter) - ord('a')
+
+            explanation_match = re.search(r'Explanation:\s*(.*)', text, re.IGNORECASE)
+            if explanation_match:
+                explanation = explanation_match.group(1).strip()
 
         if not question or not options or correct_option_index is None:
             return None, None, None, None
@@ -144,7 +166,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Send the poll
     try:
-        await update.message.reply_poll(
+        poll_message = await update.message.reply_poll(
             question=question,
             options=options,
             type=Poll.QUIZ,
@@ -152,6 +174,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             explanation=explanation or None
         )
         logger.info(f"Poll sent successfully: {question}")
+
+        # Optionally, you can pin the poll or perform additional actions here
     except Exception as e:
         logger.error(f"Error sending poll: {e}")
         await update.message.reply_text(f"Failed to send the poll. Error: {e}")

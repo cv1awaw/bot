@@ -3,14 +3,14 @@
 import os
 import logging
 import re
-import random
-import asyncio
-from telegram import Update, Poll, Bot
+import threading
+from flask import Flask
+from telegram import Update, Poll
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
-    CommandHandler,
     MessageHandler,
+    CommandHandler,
     filters,
 )
 
@@ -26,22 +26,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ----------------------
-# Initialize Telegram Bot
+# Flask App Setup
 # ----------------------
+app = Flask(__name__)
+
+@app.route('/')
+def hello_world():
+    logger.info("Received request on '/' route")
+    return 'unicornguardian'
+
+def run_flask():
+    """
+    Runs the Flask app. Intended to run in a separate thread.
+    """
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(host='0.0.0.0', port=port)
+
+# ----------------------
+# Telegram Bot Setup
+# ----------------------
+# Retrieve the bot token from environment variables
 TOKEN = os.environ.get('BOT_TOKEN')
 
 if not TOKEN:
     logger.error("BOT_TOKEN environment variable not set.")
     exit(1)
-
-# ----------------------
-# Predefined Messages for Unauthorized Users
-# ----------------------
-UNAUTHORIZED_MESSAGES = [
-    "@iwanna2die : I can see you, leave my bot.",
-    "@iwanna2die : You don't have access to my bot.",
-    "@iwanna2die : Hey, this is my bot, please leave it."
-]
+else:
+    logger.info("BOT_TOKEN successfully retrieved.")
 
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS
@@ -49,151 +61,147 @@ def is_authorized(user_id):
 def parse_mcq(text):
     """
     Parses the MCQ text and returns question, options, correct option index, and explanation.
-    Supports both Shape 1 (multi-line) and Shape 2 (single-line) formats.
+    Assumes that the MCQ is in the following format with line breaks:
+
+    Question: [question text]
+    a) [Option A]
+    b) [Option B]
+    c) [Option C]
+    d) [Option D]
+    Correct Answer: [option letter]
+    Explanation: [Explanation text]
     """
     try:
+        # Split the text into lines and strip whitespace
+        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
         question = ''
         options = []
         correct_option_index = None
         explanation = ''
 
-        # Patterns for Shape 2 (single-line)
-        shape2_pattern = re.compile(
-            r'Question:\s*(.*?)\s*a\)\s*(.*?)\s*b\)\s*(.*?)\s*c\)\s*(.*?)\s*d\)\s*(.*?)\s*Correct Answer:\s*([a-dA-D])\)\s*Explanation:\s*(.*)',
-            re.IGNORECASE
-        )
+        for line in lines:
+            if line.startswith('Question:'):
+                question = line[len('Question:'):].strip()
+            elif re.match(r'^[a-dA-D]\)', line):
+                option_text = line[2:].strip()
+                options.append(option_text)
+            elif line.startswith('Correct Answer:'):
+                correct_answer_text = line[len('Correct Answer:'):].strip()
+                # Match the option letter, possibly followed by ')'
+                match = re.match(r'^([a-dA-D])\)?', correct_answer_text)
+                if match:
+                    correct_option_letter = match.group(1).lower()
+                    correct_option_index = ord(correct_option_letter) - ord('a')
+            elif line.startswith('Explanation:'):
+                explanation = line[len('Explanation:'):].strip()
 
-        # Patterns for Shape 1 (multi-line)
-        shape1_pattern = re.compile(
-            r'Question:\s*(.*?)\s*\n*a\)\s*(.*?)\s*\n*b\)\s*(.*?)\s*\n*c\)\s*(.*?)\s*\n*d\)\s*(.*?)\s*\n*Correct Answer:\s*([a-dA-D])\)\s*\n*Explanation:\s*(.*)',
-            re.IGNORECASE | re.DOTALL
-        )
+        if not question or not options or correct_option_index is None:
+            return None, None, None, None
 
-        # Try matching Shape 2
-        match = shape2_pattern.match(text)
-        if match:
-            question = match.group(1).strip()
-            options = [
-                match.group(2).strip(),
-                match.group(3).strip(),
-                match.group(4).strip(),
-                match.group(5).strip()
-            ]
-            correct_option_letter = match.group(6).lower()
-            correct_option_index = ord(correct_option_letter) - ord('a')
-            explanation = match.group(7).strip()
-            return question, options, correct_option_index, explanation
-
-        # Try matching Shape 1
-        match = shape1_pattern.match(text)
-        if match:
-            question = match.group(1).strip()
-            options = [
-                match.group(2).strip(),
-                match.group(3).strip(),
-                match.group(4).strip(),
-                match.group(5).strip()
-            ]
-            correct_option_letter = match.group(6).lower()
-            correct_option_index = ord(correct_option_letter) - ord('a')
-            explanation = match.group(7).strip()
-            return question, options, correct_option_index, explanation
-
-        return None, None, None, None
-
+        return question, options, correct_option_index, explanation
     except Exception as e:
         logger.error(f"Error parsing MCQ: {e}")
         return None, None, None, None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming messages and create polls based on MCQ format."""
+    user_id = update.effective_user.id
+
+    if not is_authorized(user_id):
+        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
+        await update.message.reply_text("@iwanna2die : hey leave my bot alone")
+        return
+
+    text = update.message.text
+
+    logger.debug(f"Received message from user {user_id}: {text}")
+
+    # Parse the MCQ
+    question, options, correct_option_index, explanation = parse_mcq(text)
+
+    if not question or not options or correct_option_index is None:
+        logger.warning(f"Invalid MCQ format from user {user_id}")
+        await update.message.reply_text("Invalid MCQ format. Please check and try again.")
+        return
+
+    # Ensure options do not exceed 100 characters
+    for option in options:
+        if len(option) > 100:
+            logger.warning(f"Option exceeds 100 characters: {option}")
+            await update.message.reply_text("Each option must be under 100 characters. Please shorten your options.")
+            return
+
+    # Ensure question does not exceed 300 characters
+    if len(question) > 300:
+        logger.warning(f"Question exceeds 300 characters: {question}")
+        await update.message.reply_text("The question must be under 300 characters. Please shorten your question.")
+        return
+
+    # Ensure explanation does not exceed 200 characters
+    if explanation and len(explanation) > 200:
+        logger.warning(f"Explanation exceeds 200 characters: {explanation}")
+        await update.message.reply_text("The explanation must be under 200 characters. Please shorten your explanation.")
+        return
+
+    # Send the poll
     try:
-        user_id = update.effective_user.id
-
-        if not is_authorized(user_id):
-            response = random.choice(UNAUTHORIZED_MESSAGES)
-            await update.message.reply_text(response)
-            return
-
-        text = update.message.text
-        question, options, correct_option_index, explanation = parse_mcq(text)
-
-        if not all([question, options, correct_option_index is not None, explanation]):
-            shape1_example = (
-                "Please use the following MCQ format:\n\n"
-                "Question: [Your question here]\n"
-                "a) [Option A]\n"
-                "b) [Option B]\n"
-                "c) [Option C]\n"
-                "d) [Option D]\n"
-                "Correct Answer: [option letter]\n"
-                "Explanation: [Your explanation here]"
-            )
-            await update.message.reply_text(shape1_example)
-            return
-
-        # Validate lengths
-        if len(question) > 300:
-            await update.message.reply_text("The question must be under 300 characters. Please shorten your question.")
-            return
-        for option in options:
-            if len(option) > 100:
-                await update.message.reply_text("Each option must be under 100 characters. Please shorten your options.")
-                return
-        if len(explanation) > 200:
-            await update.message.reply_text("The explanation must be under 200 characters. Please shorten your explanation.")
-            return
-
         await update.message.reply_poll(
             question=question,
             options=options,
             type=Poll.QUIZ,
             correct_option_id=correct_option_index,
-            explanation=explanation
+            explanation=explanation or None
         )
         logger.info(f"Poll sent successfully: {question}")
-
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        await update.message.reply_text("An unexpected error occurred. Please try again later.")
+        logger.error(f"Error sending poll: {e}")
+        await update.message.reply_text(f"Failed to send the poll. Error: {e}")
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /start command."""
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if not is_authorized(user_id):
+        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
+        await update.message.reply_text("@iwanna2die : hey leave my bot alone")
+        return
+
+    logger.info(f"User {user_id} initiated /start")
+    await update.message.reply_text("Welcome to the MCQ Bot!")
+
+def run_bot():
+    """
+    Runs the Telegram bot. Intended to run in the main thread.
+    """
     try:
-        user_id = update.effective_user.id
+        application = ApplicationBuilder().token(TOKEN).build()
 
-        if not is_authorized(user_id):
-            response = random.choice(UNAUTHORIZED_MESSAGES)
-            await update.message.reply_text(response)
-            return
+        # Add handlers
+        application.add_handler(CommandHandler('start', start))
+        application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-        await update.message.reply_text("Welcome to the MCQ Bot! Send me an MCQ in the specified format to create a poll.")
+        # Start the bot
+        logger.info("Bot started...")
+        application.run_polling()
     except Exception as e:
-        logger.error(f"Error handling /start command: {e}")
-        await update.message.reply_text("An unexpected error occurred. Please try again later.")
+        logger.error(f"Error running bot: {e}")
 
-def main():
-    """Start the bot using webhook."""
-    application = ApplicationBuilder().token(TOKEN).build()
+# ----------------------
+# Graceful Shutdown Handling
+# ----------------------
+def shutdown(signum, frame):
+    logger.info("Received shutdown signal. Shutting down gracefully...")
+    os._exit(0)
 
-    # Add Handlers
-    application.add_handler(CommandHandler('start', start_command))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+import signal
+signal.signal(signal.SIGINT, shutdown)
+signal.signal(signal.SIGTERM, shutdown)
 
-    # Set Up Webhook
-    WEBHOOK_URL = os.environ.get('WEBHOOK_URL')  # e.g., https://yourservice.koyeb.app/webhook
-
-    if not WEBHOOK_URL:
-        logger.error("WEBHOOK_URL environment variable not set.")
-        exit(1)
-
-    # Start the webhook
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8443)),
-        url_path=TOKEN,  # Use the bot token as the URL path for security
-        webhook_url=WEBHOOK_URL
-    )
-
+# ----------------------
+# Main Execution
+# ----------------------
 if __name__ == '__main__':
-    main()
+    # Start Flask app in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # Run Telegram bot in the main thread
+    run_bot()

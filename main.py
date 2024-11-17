@@ -64,10 +64,10 @@ def parse_mcq(text):
     Parses the single-line MCQ text and returns question, options, correct option index, and explanation.
     
     Expected format:
-    Question: [question text] a) [Option A] b) [Option B] c) [Option C] d) [Option D] Correct Answer: [option letter] [Option Text] Explanation: [Explanation text]
+    Question: [question text] a) [Option A] b) [Option B] c) [Option C] d) [Option D] Correct Answer: [option letter] Explanation: [Explanation text]
     
     Example:
-    Question: The sacral promontory contributes to the border of which pelvic structure? a) Pelvic outlet b) Pubic arch c) Pelvic inlet d) Iliac fossa Correct Answer: c) Pelvic inlet Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
+    Question: The sacral promontory contributes to the border of which pelvic structure? a) Pelvic outlet b) Pubic arch c) Pelvic inlet d) Iliac fossa Correct Answer: c) Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
     """
     try:
         question = ''
@@ -156,13 +156,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Please use the following single-line format to create an MCQ:\n"
                 "Question: [Your question here] "
                 "a) [Option A] b) [Option B] c) [Option C] d) [Option D] "
-                "Correct Answer: [option letter] [Option Text] "
-                "Explanation: [Your explanation here]"
+                "Correct Answer: [option letter] Explanation: [Your explanation here]"
             )
             logger.warning(f"Authorized user {user_id} sent an invalid MCQ format.")
             await update.message.reply_text(format_instructions)
     else:
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
+        # Select a random response from the predefined list
         response = random.choice(UNAUTHORIZED_RESPONSES)
         await update.message.reply_text(response)
 
@@ -171,6 +171,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
+        # Select a random response from the predefined list
         response = random.choice(UNAUTHORIZED_RESPONSES)
         await update.message.reply_text(response)
         return

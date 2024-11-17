@@ -106,7 +106,7 @@ def parse_mcq(text):
 # Predefined messages for unauthorized users
 UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : leave my bot buddy",
-    "@iwanna2die : if can see u here",
+    "@iwanna2die : i can see u here",
     "@iwanna2die : this is my bot can u leave it ?",
     "@iwanba2die : leave my bot alone"
 ]

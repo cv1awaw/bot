@@ -6,6 +6,7 @@ import re
 import threading
 import random
 import json
+import asyncio
 from flask import Flask, request
 from telegram import Update, Poll
 from telegram.ext import (
@@ -32,6 +33,16 @@ logger = logging.getLogger(__name__)
 # ----------------------
 app = Flask(__name__)
 
+# Retrieve the bot token from environment variables
+TOKEN = os.environ.get('BOT_TOKEN')
+
+# Check if TOKEN is retrieved successfully
+if not TOKEN:
+    logger.error("BOT_TOKEN environment variable not set.")
+    exit(1)
+else:
+    logger.info("BOT_TOKEN successfully retrieved.")
+
 @app.route('/')
 def hello_world():
     logger.info("Received request on '/' route")
@@ -54,14 +65,6 @@ def run_flask():
 # ----------------------
 # Telegram Bot Setup
 # ----------------------
-# Retrieve the bot token from environment variables
-TOKEN = os.environ.get('BOT_TOKEN')
-
-if not TOKEN:
-    logger.error("BOT_TOKEN environment variable not set.")
-    exit(1)
-else:
-    logger.info("BOT_TOKEN successfully retrieved.")
 
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS
@@ -119,6 +122,5 @@ if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Run Telegram bot in the main thread
-    import asyncio
+    # Run Telegram bot in the main thread asynchronously
     asyncio.run(run_bot())

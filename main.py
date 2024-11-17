@@ -43,40 +43,42 @@ def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS
 
 def parse_mcq(text):
-    question = ''
-    options = []
-    correct_option_index = None
-    explanation = ''
+    """
+    Parses the MCQ text and returns question, options, correct option index, and explanation.
+    Supports both Shape 1 (multi-line) and Shape 2 (single-line) formats.
+    """
+    try:
+        # Initialize variables
+        question = ''
+        options = []
+        correct_option_index = None
+        explanation = ''
 
-    # Patterns for Shape 1 and Shape 2
-    shape1_pattern = re.compile(
-        r'Question:\s*(.*?)\s*a\)\s*(.*?)\s*b\)\s*(.*?)\s*c\)\s*(.*?)\s*d\)\s*(.*?)\s*Correct Answer:\s*([a-dA-D])\)\s*Explanation:\s*(.*)',
-        re.IGNORECASE | re.DOTALL
-    )
-    shape2_pattern = re.compile(
-        r'Question:\s*(.*?)\s*a\)\s*(.*?)\s*b\)\s*(.*?)\s*c\)\s*(.*?)\s*d\)\s*(.*?)\s*Correct Answer:\s*([a-dA-D])\)\s*Explanation:\s*(.*)',
-        re.IGNORECASE | re.DOTALL
-    )
+        # Regular expression patterns for Shape 1 and Shape 2
+        pattern = re.compile(
+            r'Question:\s*(.*?)\s*(?:a\)\s*(.*?)\s*b\)\s*(.*?)\s*c\)\s*(.*?)\s*d\)\s*(.*?)\s*Correct Answer:\s*([a-dA-D])\)\s*Explanation:\s*(.*)',
+            re.IGNORECASE | re.DOTALL
+        )
 
-    match = shape1_pattern.match(text)
-    if match:
-        question = match.group(1).strip()
-        options = [match.group(2).strip(), match.group(3).strip(), match.group(4).strip(), match.group(5).strip()]
-        correct_option_letter = match.group(6).lower()
-        correct_option_index = ord(correct_option_letter) - ord('a')
-        explanation = match.group(7).strip()
-        return question, options, correct_option_index, explanation
+        match = pattern.match(text)
+        if match:
+            question = match.group(1).strip()
+            options = [
+                match.group(2).strip(),
+                match.group(3).strip(),
+                match.group(4).strip(),
+                match.group(5).strip()
+            ]
+            correct_option_letter = match.group(6).lower()
+            correct_option_index = ord(correct_option_letter) - ord('a')
+            explanation = match.group(7).strip()
+            return question, options, correct_option_index, explanation
 
-    match = shape2_pattern.match(text)
-    if match:
-        question = match.group(1).strip()
-        options = [match.group(2).strip(), match.group(3).strip(), match.group(4).strip(), match.group(5).strip()]
-        correct_option_letter = match.group(6).lower()
-        correct_option_index = ord(correct_option_letter) - ord('a')
-        explanation = match.group(7).strip()
-        return question, options, correct_option_index, explanation
+        return None, None, None, None
 
-    return None, None, None, None
+    except Exception as e:
+        logger.error(f"Error parsing MCQ: {e}")
+        return None, None, None, None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -137,6 +139,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Welcome to the MCQ Bot! Send me an MCQ in the specified format to create a poll.")
 
+# Add Handlers to the Application
 application.add_handler(CommandHandler('start', start_command))
 application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 

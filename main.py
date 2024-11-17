@@ -90,9 +90,10 @@ def parse_mcq(text):
         explanation = ''
 
         # Define regex patterns
-        question_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
-        option_pattern = re.compile(r'^([a-dA-D])\)\s*(.+)$')
-        correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-dA-D])\)?', re.IGNORECASE)
+        # Updated pattern to handle variations in the "Question" line
+        question_pattern = re.compile(r'^Question(?:\s*[^)]*)?\s*:\s*(.+)$', re.IGNORECASE)
+        option_pattern = re.compile(r'^([a-dA-D])\s*(.+)$')
+        correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-dA-D])?', re.IGNORECASE)
         explanation_pattern = re.compile(r'^Explanation:\s*(.+)$', re.IGNORECASE)
 
         for line in lines:
@@ -147,16 +148,26 @@ UNAUTHORIZED_RESPONSES = [
     "@iwanba2die : leave my bot alone"
 ]
 
-# Predefined instruction message for authorized users
+# Updated instruction message for authorized users with examples
 INSTRUCTION_MESSAGE = (
     "Please use the following multi-line format to create an MCQ:\n\n"
+    "Example 1:\n"
     "Question: The sacral promontory contributes to the border of which pelvic structure?\n"
     "a) Pelvic outlet\n"
     "b) Pubic arch\n"
     "c) Pelvic inlet\n"
     "d) Iliac fossa\n"
     "Correct Answer: c)\n"
-    "Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet."
+    "Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.\n\n"
+    "Example 2:\n"
+    "Question (123): MHC Class I molecules present antigens to which type of T cells?\n"
+    "A) CD4⁺ T helper cells\n"
+    "B) CD8⁺ cytotoxic T cells\n"
+    "C) B cells\n"
+    "D) Natural Killer cells\n"
+    "Correct Answer: B) CD8⁺ cytotoxic T cells\n"
+    "Explanation: MHC Class I presents intracellular antigens to CD8⁺ cytotoxic T cells.\n\n"
+    "Ensure that each part starts on a new line and follows the format precisely."
 )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):

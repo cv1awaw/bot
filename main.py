@@ -37,7 +37,7 @@ def hello_world():
     logger.info("Received request on '/' route")
     return 'unicornguardian'
 
-@app.route(f'/{os.environ.get("TOKEN")}', methods=['POST'])
+@app.route(f'/{TOKEN}', methods=['POST'])
 async def webhook():
     update = Update.de_json(await request.get_json(force=True), application.bot)
     await application.process_update(update)
@@ -76,7 +76,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # [Your existing start command logic]
     pass
 
-def run_bot():
+async def run_bot():
     """
     Runs the Telegram bot. Intended to run in the main thread.
     """
@@ -87,11 +87,11 @@ def run_bot():
         application.add_handler(CommandHandler('start', start))
         application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-        # Set the webhook (optional but recommended)
-        application.bot.set_webhook(f"https://<your-koyeb-app-url>/{TOKEN}")
+        # Set the webhook URL
+        await application.bot.set_webhook(f"https://<your-koyeb-app-url>/{TOKEN}")
 
         # Start the webhook
-        application.run_webhook(
+        await application.run_webhook(
             listen="0.0.0.0",
             port=int(os.environ.get('PORT', 8000)),
             url_path=TOKEN,
@@ -120,4 +120,5 @@ if __name__ == '__main__':
     flask_thread.start()
 
     # Run Telegram bot in the main thread
-    run_bot()
+    import asyncio
+    asyncio.run(run_bot())

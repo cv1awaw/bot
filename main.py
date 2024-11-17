@@ -3,15 +3,15 @@
 import os
 import logging
 import re
-import random
-from flask import Flask, request, abort
-from telegram import Update, Poll, Bot
+import threading
+from flask import Flask
+from telegram import Update, Poll
 from telegram.ext import (
-    Dispatcher,
-    CommandHandler,
-    MessageHandler,
-    filters,
+    ApplicationBuilder,
     ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters,
 )
 
 from allowed_users import ALLOWED_USER_IDS
@@ -30,7 +30,23 @@ logger = logging.getLogger(__name__)
 # ----------------------
 app = Flask(__name__)
 
-# Initialize the bot
+@app.route('/')
+def hello_world():
+    logger.info("Received request on '/' route")
+    return 'unicornguardian'
+
+def run_flask():
+    """
+    Runs the Flask app. Intended to run in a separate thread.
+    """
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(host='0.0.0.0', port=port)
+
+# ----------------------
+# Telegram Bot Setup
+# ----------------------
+# Retrieve the bot token from environment variables
 TOKEN = os.environ.get('BOT_TOKEN')
 
 if not TOKEN:
@@ -39,80 +55,50 @@ if not TOKEN:
 else:
     logger.info("BOT_TOKEN successfully retrieved.")
 
-bot = Bot(token=TOKEN)
-
-# Initialize Dispatcher
-dispatcher = Dispatcher(bot=bot, update_queue=None, use_context=True)
-
-# Predefined messages for unauthorized users
-UNAUTHORIZED_MESSAGES = [
-    "@iwanna2die : i can see u , leave my bot",
-    "@iwanna2die : u don't have access to my bot",
-    "@iwanna2die : hey this is my bot leave it"
-]
-
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS
 
 def parse_mcq(text):
     """
     Parses the MCQ text and returns question, options, correct option index, and explanation.
-    Supports both Shape 1 (multi-line) and Shape 2 (single-line) formats.
+    Assumes that the MCQ is in the following format with line breaks:
+
+    Question: [question text]
+    a) [Option A]
+    b) [Option B]
+    c) [Option C]
+    d) [Option D]
+    Correct Answer: [option letter]
+    Explanation: [Explanation text]
     """
     try:
-        # Initialize variables
+        # Split the text into lines and strip whitespace
+        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
         question = ''
         options = []
         correct_option_index = None
         explanation = ''
 
-        # Patterns to identify components
-        question_pattern = r'Question:\s*(.*?)\s*(?:a\)|Correct Answer:|Explanation:|$)'
-        option_pattern = r'([a-dA-D])\)\s*(.*?)\s*(?=[a-dA-D]\)|Correct Answer:|Explanation:|$)'
-        correct_answer_pattern = r'Correct Answer:\s*([a-dA-D])\)'
-        explanation_pattern = r'Explanation:\s*(.*)'
-
-        # Extract Question
-        question_match = re.search(question_pattern, text, re.IGNORECASE | re.DOTALL)
-        if question_match:
-            question = question_match.group(1).strip()
-            logger.debug(f"Extracted Question: {question}")
-        else:
-            logger.warning("Question not found in the MCQ.")
-            return None, None, None, None
-
-        # Extract Options
-        options_matches = re.findall(option_pattern, text, re.IGNORECASE | re.DOTALL)
-        if options_matches:
-            for match in options_matches:
-                option_letter = match[0].lower()
-                option_text = match[1].strip()
+        for line in lines:
+            if line.startswith('Question:'):
+                question = line[len('Question:'):].strip()
+            elif re.match(r'^[a-dA-D]\)', line):
+                option_text = line[2:].strip()
                 options.append(option_text)
-                logger.debug(f"Extracted Option {option_letter.upper()}: {option_text}")
-        else:
-            logger.warning("Options not found in the MCQ.")
-            return None, None, None, None
+            elif line.startswith('Correct Answer:'):
+                correct_answer_text = line[len('Correct Answer:'):].strip()
+                # Match the option letter, possibly followed by ')'
+                match = re.match(r'^([a-dA-D])\)?', correct_answer_text)
+                if match:
+                    correct_option_letter = match.group(1).lower()
+                    correct_option_index = ord(correct_option_letter) - ord('a')
+            elif line.startswith('Explanation:'):
+                explanation = line[len('Explanation:'):].strip()
 
-        # Extract Correct Answer
-        correct_answer_match = re.search(correct_answer_pattern, text, re.IGNORECASE)
-        if correct_answer_match:
-            correct_option_letter = correct_answer_match.group(1).lower()
-            correct_option_index = ord(correct_option_letter) - ord('a')
-            logger.debug(f"Extracted Correct Answer: {correct_option_letter.upper()}")
-        else:
-            logger.warning("Correct Answer not found in the MCQ.")
+        if not question or not options or correct_option_index is None:
             return None, None, None, None
-
-        # Extract Explanation
-        explanation_match = re.search(explanation_pattern, text, re.IGNORECASE | re.DOTALL)
-        if explanation_match:
-            explanation = explanation_match.group(1).strip()
-            logger.debug(f"Extracted Explanation: {explanation}")
-        else:
-            logger.info("Explanation not found in the MCQ.")
 
         return question, options, correct_option_index, explanation
-
     except Exception as e:
         logger.error(f"Error parsing MCQ: {e}")
         return None, None, None, None
@@ -122,8 +108,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        response = random.choice(UNAUTHORIZED_MESSAGES)
-        await update.message.reply_text(response)
+        await update.message.reply_text("@iwanna2die : hey leave my bot alone")
         return
 
     text = update.message.text
@@ -135,18 +120,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not question or not options or correct_option_index is None:
         logger.warning(f"Invalid MCQ format from user {user_id}")
-        # Respond with Shape 1 format as a reference
-        shape1_example = (
-            "Please use the following MCQ format:\n\n"
-            "Question: [Your question here]\n"
-            "a) [Option A]\n"
-            "b) [Option B]\n"
-            "c) [Option C]\n"
-            "d) [Option D]\n"
-            "Correct Answer: [option letter]\n"
-            "Explanation: [Your explanation here]"
-        )
-        await update.message.reply_text(shape1_example)
+        await update.message.reply_text("Invalid MCQ format. Please check and try again.")
         return
 
     # Ensure options do not exceed 100 characters
@@ -182,38 +156,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error sending poll: {e}")
         await update.message.reply_text(f"Failed to send the poll. Error: {e}")
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        response = random.choice(UNAUTHORIZED_MESSAGES)
-        await update.message.reply_text(response)
+        await update.message.reply_text("@iwanna2die : hey leave my bot alone")
         return
 
     logger.info(f"User {user_id} initiated /start")
     await update.message.reply_text("Welcome to the MCQ Bot!")
 
-# Add handlers to dispatcher
-dispatcher.add_handler(CommandHandler('start', start_command))
-dispatcher.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+def run_bot():
+    """
+    Runs the Telegram bot. Intended to run in the main thread.
+    """
+    try:
+        application = ApplicationBuilder().token(TOKEN).build()
 
-# ----------------------
-# Flask Routes
-# ----------------------
-@app.route('/', methods=['GET'])
-def hello_world():
-    logger.info("Received request on '/' route")
-    return 'unicornguardian'
+        # Add handlers
+        application.add_handler(CommandHandler('start', start))
+        application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.method == 'POST':
-        update = Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)
-        return 'OK', 200
-    else:
-        abort(403)
+        # Start the bot
+        logger.info("Bot started...")
+        application.run_polling()
+    except Exception as e:
+        logger.error(f"Error running bot: {e}")
 
 # ----------------------
 # Graceful Shutdown Handling
@@ -230,25 +199,9 @@ signal.signal(signal.SIGTERM, shutdown)
 # Main Execution
 # ----------------------
 if __name__ == '__main__':
-    # Set the webhook
-    WEBHOOK_URL = os.environ.get('WEBHOOK_URL')  # e.g., https://yourapp.herokuapp.com/webhook
+    # Start Flask app in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
 
-    if not WEBHOOK_URL:
-        logger.error("WEBHOOK_URL environment variable not set.")
-        exit(1)
-
-    # Remove existing webhook if any
-    bot.delete_webhook()
-
-    # Set the new webhook
-    success = bot.set_webhook(url=WEBHOOK_URL)
-    if success:
-        logger.info(f"Webhook set to {WEBHOOK_URL}")
-    else:
-        logger.error("Failed to set webhook.")
-        exit(1)
-
-    # Start Flask app
-    port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting Flask app on port {port}")
-    app.run(host='0.0.0.0', port=port)
+    # Run Telegram bot in the main thread
+    run_bot()

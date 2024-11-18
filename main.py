@@ -221,6 +221,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user_id} initiated /start")
     await update.message.reply_text("Welcome to the MCQ Bot! Send me your MCQs in the specified multi-line format.")
 
+# NEW: Add the /show command handler
+async def show_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if is_authorized(user_id):
+        total_members = get_total_users()
+        await update.message.reply_text(f"📊 **Total Members:** {total_members}\n🌐 **Servers:** {len(context.bot_data.get('guilds', []))}")
+        logger.info(f"User {user_id} requested member count: {total_members} members.")
+    else:
+        logger.warning(f"Unauthorized user {user_id} attempted to use /show command.")
+        # Select a random response from the predefined list
+        response = random.choice(UNAUTHORIZED_RESPONSES)
+        await update.message.reply_text(response)
+
 def run_bot():
     """
     Runs the Telegram bot. Intended to run in the main thread.
@@ -230,7 +244,11 @@ def run_bot():
 
         # Add handlers
         application.add_handler(CommandHandler('start', start))
+        application.add_handler(CommandHandler('show', show_members))  # NEW: Register /show command
         application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+        # Initialize guilds data if necessary
+        application.bot_data['guilds'] = list(application.bot_data.get('guilds', []))  # Example initialization
 
         # Start the bot
         logger.info("Bot started...")

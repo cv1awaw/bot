@@ -144,7 +144,9 @@ UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : leave my bot buddy",
     "@iwanna2die : i can see u here",
     "@iwanna2die : this is my bot can u leave it ?",
-    "@iwanna2die : leave my bot alone"
+    "@iwanna2die : leave my bot alone",
+    "@iwanna2die : ابلع ما تكدر تستخدم البوت",
+    "@iwanna2die : ما عندك وصول للبوت حبيبي",
 ]
 
 # Predefined instruction message for authorized users

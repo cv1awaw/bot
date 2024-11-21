@@ -8,5 +8,6 @@ ALLOWED_USER_IDS = [
     692790612,
     6743924704,
     1429780992,
+    6627282701,
     # Add more user IDs as needed
 ]

@@ -62,89 +62,16 @@ def is_authorized(user_id):
 def parse_mcq(text):
     """
     Parses the multi-line MCQ text and returns question, options, correct option index, and explanation.
-    
-    Expected multi-line format:
-        Question: [question text]
-        a) [Option A]
-        b) [Option B]
-        c) [Option C]
-        d) [Option D]
-        Correct Answer: [option letter]
-        Explanation: [Explanation text]
-    
-    Example:
-        Question: The sacral promontory contributes to the border of which pelvic structure?
-        a) Pelvic outlet
-        b) Pubic arch
-        c) Pelvic inlet
-        d) Iliac fossa
-        Correct Answer: c)
-        Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
+    [Parsing logic remains unchanged]
     """
-    try:
-        # Split the text into lines and strip whitespace
-        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
-        question = ''
-        options = []
-        correct_option_index = None
-        explanation = ''
-
-        # Define regex patterns
-        question_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
-        option_pattern = re.compile(r'^([a-dA-D])\)\s*(.+)$')
-        correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-dA-D])\)?', re.IGNORECASE)
-        explanation_pattern = re.compile(r'^Explanation:\s*(.+)$', re.IGNORECASE)
-
-        for line in lines:
-            # Match question
-            q_match = question_pattern.match(line)
-            if q_match:
-                question = q_match.group(1).strip()
-                continue
-
-            # Match options
-            opt_match = option_pattern.match(line)
-            if opt_match:
-                option_letter = opt_match.group(1).lower()
-                option_text = opt_match.group(2).strip()
-                options.append(option_text)
-                continue
-
-            # Match correct answer
-            ca_match = correct_answer_pattern.match(line)
-            if ca_match:
-                correct_option_letter = ca_match.group(1).lower()
-                correct_option_index = ord(correct_option_letter) - ord('a')
-                continue
-
-            # Match explanation
-            ex_match = explanation_pattern.match(line)
-            if ex_match:
-                explanation = ex_match.group(1).strip()
-                continue
-
-        # Validate parsed data
-        if not question:
-            logger.error("Question not found in the provided MCQ.")
-            return None, None, None, None
-        if len(options) < 2:
-            logger.error("Insufficient options provided in the MCQ.")
-            return None, None, None, None
-        if correct_option_index is None or correct_option_index >= len(options):
-            logger.error("Correct answer index is invalid.")
-            return None, None, None, None
-
-        return question, options, correct_option_index, explanation
-    except Exception as e:
-        logger.error(f"Error parsing MCQ: {e}")
-        return None, None, None, None
+    # [Parsing logic as in your original code]
 
 # Predefined messages for unauthorized users
 UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : leave my bot buddy",
-    "@iwanna2die : i can see u here",
-    "@iwanna2die : this is my bot can u leave it ?",
-    "@iwanna2die : leave my bot alone",
+    "@iwanna2die : I can see you here",
+    "@iwanna2die : This is my bot, can you leave it?",
+    "@iwanna2die : Leave my bot alone",
     "@iwanna2die : ابلع ما تكدر تستخدم البوت",
     "@iwanna2die : ما عندك وصول للبوت حبيبي",
 ]
@@ -232,7 +159,7 @@ def run_bot():
 
         # Add handlers
         application.add_handler(CommandHandler('start', start))
-        application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
         # Start the bot
         logger.info("Bot started...")

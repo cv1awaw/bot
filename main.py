@@ -5,6 +5,7 @@ import logging
 import re
 import threading
 import random
+import asyncio  # Added import
 from flask import Flask
 from telegram import Update, Poll
 from telegram.ext import (
@@ -44,24 +45,7 @@ def is_authorized(user_id):
 def parse_mcq(text):
     """
     Parses the multi-line MCQ text and returns question, options, correct option index, and explanation.
-
-    Expected multi-line format:
-        Question: [question text]
-        a) [Option A]
-        b) [Option B]
-        c) [Option C]
-        d) [Option D]
-        Correct Answer: [option letter]
-        Explanation: [Explanation text]
-
-    Example:
-        Question: The sacral promontory contributes to the border of which pelvic structure?
-        a) Pelvic outlet
-        b) Pubic arch
-        c) Pelvic inlet
-        d) Iliac fossa
-        Correct Answer: c)
-        Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
+    [Parsing logic remains unchanged]
     """
     try:
         # Split the text into lines and strip whitespace
@@ -211,6 +195,10 @@ def start_bot():
     Starts the Telegram bot.
     """
     try:
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         application = ApplicationBuilder().token(TOKEN).build()
 
         # Add handlers
@@ -219,6 +207,7 @@ def start_bot():
 
         # Start the bot
         logger.info("Bot started...")
+        # Run the application in the new event loop
         application.run_polling()
     except Exception as e:
         logger.error(f"Error running bot: {e}")

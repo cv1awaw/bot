@@ -233,11 +233,11 @@ def hello_world():
     logger.info("Received request on '/' route")
     return 'unicornguardian'
 
-# Start the bot in a separate thread when the Flask app starts
-if __name__ == '__main__':
-    # Start the bot in a separate thread
-    bot_thread = threading.Thread(target=start_bot)
-    bot_thread.start()
+# ----------------------
+# Main Execution
+# ----------------------
+# Start the bot in a separate thread
+bot_thread = threading.Thread(target=start_bot, name="BotThread")
+bot_thread.start()
 
-    # Start the Flask app (Gunicorn will handle this in production)
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+# Note: Do not call app.run() here when using Gunicorn

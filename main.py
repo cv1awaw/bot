@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import logging
 import re
@@ -21,9 +19,13 @@ from allowed_users import ALLOWED_USER_IDS
 # ----------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Change to DEBUG for more detailed logs during troubleshooting
+    level=logging.INFO  # Set to INFO, adjust as needed
 )
 logger = logging.getLogger(__name__)
+
+# Suppress verbose logs from 'telegram' libraries
+logging.getLogger('telegram').setLevel(logging.WARNING)
+logging.getLogger('telegram.ext').setLevel(logging.WARNING)
 
 # ----------------------
 # Telegram Bot Setup
@@ -106,11 +108,11 @@ def parse_mcq(text):
 
         # Validate parsed data
         if not question:
-            logger.error("Question not found in the provided MCQ.")
+            logger.warning("Question not found in the provided MCQ.")
         elif len(options) < 2:
-            logger.error("Insufficient options provided in the MCQ.")
+            logger.warning("Insufficient options provided in the MCQ.")
         elif correct_option_index is None or correct_option_index >= len(options):
-            logger.error("Correct answer index is invalid.")
+            logger.warning("Correct answer index is invalid.")
         else:
             # If validation passes, return the parsed components
             return question, options, correct_option_index, explanation

@@ -27,24 +27,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ----------------------
-# Flask App Setup
-# ----------------------
-app = Flask(__name__)
-
-@app.route('/')
-def hello_world():
-    logger.info("Received request on '/' route")
-    return 'unicornguardian'
-
-def run_flask():
-    """
-    Runs the Flask app. Intended to run in a separate thread.
-    """
-    port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting Flask app on port {port}")
-    app.run(host='0.0.0.0', port=port)
-
-# ----------------------
 # Telegram Bot Setup
 # ----------------------
 # Retrieve the bot token from environment variables
@@ -62,9 +44,83 @@ def is_authorized(user_id):
 def parse_mcq(text):
     """
     Parses the multi-line MCQ text and returns question, options, correct option index, and explanation.
-    [Parsing logic remains unchanged]
+
+    Expected multi-line format:
+        Question: [question text]
+        a) [Option A]
+        b) [Option B]
+        c) [Option C]
+        d) [Option D]
+        Correct Answer: [option letter]
+        Explanation: [Explanation text]
+
+    Example:
+        Question: The sacral promontory contributes to the border of which pelvic structure?
+        a) Pelvic outlet
+        b) Pubic arch
+        c) Pelvic inlet
+        d) Iliac fossa
+        Correct Answer: c)
+        Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
     """
-    # [Parsing logic as in your original code]
+    try:
+        # Split the text into lines and strip whitespace
+        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
+        question = ''
+        options = []
+        correct_option_index = None
+        explanation = ''
+
+        # Define regex patterns
+        question_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
+        option_pattern = re.compile(r'^([a-dA-D])\)\s*(.+)$')
+        correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-dA-D])\)?', re.IGNORECASE)
+        explanation_pattern = re.compile(r'^Explanation:\s*(.+)$', re.IGNORECASE)
+
+        for line in lines:
+            # Match question
+            q_match = question_pattern.match(line)
+            if q_match:
+                question = q_match.group(1).strip()
+                continue
+
+            # Match options
+            opt_match = option_pattern.match(line)
+            if opt_match:
+                option_letter = opt_match.group(1).lower()
+                option_text = opt_match.group(2).strip()
+                options.append(option_text)
+                continue
+
+            # Match correct answer
+            ca_match = correct_answer_pattern.match(line)
+            if ca_match:
+                correct_option_letter = ca_match.group(1).lower()
+                correct_option_index = ord(correct_option_letter) - ord('a')
+                continue
+
+            # Match explanation
+            ex_match = explanation_pattern.match(line)
+            if ex_match:
+                explanation = ex_match.group(1).strip()
+                continue
+
+        # Validate parsed data
+        if not question:
+            logger.error("Question not found in the provided MCQ.")
+        elif len(options) < 2:
+            logger.error("Insufficient options provided in the MCQ.")
+        elif correct_option_index is None or correct_option_index >= len(options):
+            logger.error("Correct answer index is invalid.")
+        else:
+            # If validation passes, return the parsed components
+            return question, options, correct_option_index, explanation
+
+    except Exception as e:
+        logger.error(f"Error parsing MCQ: {e}")
+
+    # Ensure the function always returns four values
+    return None, None, None, None
 
 # Predefined messages for unauthorized users
 UNAUTHORIZED_RESPONSES = [
@@ -150,9 +206,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user_id} initiated /start")
     await update.message.reply_text("Welcome to the MCQ Bot! Send me your MCQs in the specified multi-line format.")
 
-def run_bot():
+def start_bot():
     """
-    Runs the Telegram bot. Intended to run in the main thread.
+    Starts the Telegram bot.
     """
     try:
         application = ApplicationBuilder().token(TOKEN).build()
@@ -168,23 +224,20 @@ def run_bot():
         logger.error(f"Error running bot: {e}")
 
 # ----------------------
-# Graceful Shutdown Handling
+# Flask App Setup
 # ----------------------
-def shutdown(signum, frame):
-    logger.info("Received shutdown signal. Shutting down gracefully...")
-    os._exit(0)
+app = Flask(__name__)
 
-import signal
-signal.signal(signal.SIGINT, shutdown)
-signal.signal(signal.SIGTERM, shutdown)
+@app.route('/')
+def hello_world():
+    logger.info("Received request on '/' route")
+    return 'unicornguardian'
 
-# ----------------------
-# Main Execution
-# ----------------------
+# Start the bot in a separate thread when the Flask app starts
 if __name__ == '__main__':
-    # Start Flask app in a separate thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    # Start the bot in a separate thread
+    bot_thread = threading.Thread(target=start_bot)
+    bot_thread.start()
 
-    # Run Telegram bot in the main thread
-    run_bot()
+    # Start the Flask app (Gunicorn will handle this in production)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))

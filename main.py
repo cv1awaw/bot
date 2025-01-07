@@ -59,7 +59,7 @@ def preprocess_text_for_questions(text):
         "edema.Question: Which metal ..." 
     تتحوّل إلى:
         "edema.\nQuestion: Which metal ..."
-    
+
     هذا يضمن أن parse_multiple_mcqs سيكتشف سطرًا يبدأ بـ 'Question:'.
     """
     pattern = re.compile(r'([^\n])Question:\s*', re.IGNORECASE)
@@ -70,7 +70,7 @@ def parse_single_mcq(text):
     """
     تحلل نص سؤال واحد (MCQ) وتعيد: (question, options, correct_option_index, explanation)
     أو تعيد (None, None, None, None) لو كان التنسيق خاطئ.
-    
+
     الصيغة المتوقعة في كل سؤال:
     Question: نص السؤال
     A) خيار أول
@@ -199,26 +199,32 @@ UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : ما عندك وصول للبوت حبيبي",
 ]
 
+# ملاحظة: تم تحديث رسالة التعليمات لتضمين قيود التنسيق بشكل أوضح
 INSTRUCTION_MESSAGE = (
-    "أرسل أسئلتك بالصيغة التالية (يمكنك وضع أكثر من سؤال في رسالة واحدة):\n\n"
-    "Question: نص السؤال الأول\n"
-    "A) خيار أول\n"
-    "B) خيار ثاني\n"
-    "C) خيار ثالث\n"
+    "أرسل أسئلتك بالصيغة المتعددة (MCQs) كما هو موضح أدناه. يُرجى الانتباه للتفاصيل:\n\n"
+    "1) يجب أن يبدأ كل سؤال بسطر يتضمن كلمة:  Question:\n"
+    "   مثال:\n"
+    "   Question: نص السؤال\n"
+    "   A) خيار أول\n"
+    "   B) خيار ثاني\n"
+    "   C) خيار ثالث\n"
+    "   Correct Answer: B\n"
+    "   Explanation: شرح مختصر.\n\n"
+    "2) لا تكتب 'Question 1:' أو 'Question 2:'. استخدم فقط 'Question:'.\n"
+    "3) لا تضف الرمز ) أو أي نص إضافي بعد حرف الإجابة في 'Correct Answer:'.\n"
+    "   فقط حرف واحد مثل: A أو B أو C...\n"
+    "4) يجب ألا يتجاوز طول السؤال 300 حرف.\n"
+    "5) يجب ألا يتجاوز طول أي خيار 100 حرف.\n"
+    "6) يجب ألا يتجاوز طول الشرح 200 حرف.\n"
+    "7) أقصى عدد للخيارات: 10 (A-J).\n\n"
+    "إليك مثالًا جاهزًا لإرسال عدة أسئلة دفعة واحدة:\n\n"
+    "Question: ما هي عاصمة فرنسا؟\n"
+    "A) برلين\n"
+    "B) باريس\n"
+    "C) مدريد\n"
     "Correct Answer: B\n"
-    "Explanation: شرح مختصر حول الإجابة الصحيحة.\n\n"
-    "Question: نص السؤال الثاني\n"
-    "A) خيار أول\n"
-    "B) خيار ثاني\n"
-    "C) خيار ثالث\n"
-    "D) خيار رابع\n"
-    "Correct Answer: D\n"
-    "Explanation: الشرح.\n\n"
-    "— ملاحظات مهمة —\n"
-    "• أقصى عدد للخيارات: 10 (A-J).\n"
-    "• يجب ألا يتجاوز طول السؤال 300 حرف.\n"
-    "• يجب ألا يتجاوز طول أي خيار 100 حرف.\n"
-    "• يجب ألا يتجاوز طول الشرح 200 حرف.\n"
+    "Explanation: باريس هي عاصمة فرنسا.\n\n"
+    "يمكنك إضافة سؤال آخر بنفس التنسيق في نفس الرسالة.\n"
 )
 
 # ------------------------------------------------------------------------
@@ -238,7 +244,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(INSTRUCTION_MESSAGE)
             return
 
-        # سننشئ استفتاء لكل سؤال
+        # سننشئ استفتاء (Quiz Poll) لكل سؤال
         for (question, options, correct_option_index, explanation) in mcqs:
             # التحقق من أطوال النصوص
             if len(question) > 300:

@@ -12,14 +12,14 @@ from telegram.ext import (
     filters,
 )
 
-from allowed_users import ALLOWED_USER_IDS
+from allowed_users import ALLOWED_USER_IDS  # تأكد من وجوده وضبطه بقيم صحيحة
 
 # ----------------------
 # Configure Logging
 # ----------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # يمكنك تغييرها إلى DEBUG لرؤية رسائل التصحيح
+    level=logging.INFO  # يمكنك تحويلها إلى DEBUG لرؤية رسائل أكثر تفصيلاً
 )
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ logging.getLogger('telegram.ext').setLevel(logging.WARNING)
 # ----------------------
 # Telegram Bot Setup
 # ----------------------
-TOKEN = os.environ.get('BOT_TOKEN')  # تأكد من ضبط المتغير البيئي
+TOKEN = os.environ.get('BOT_TOKEN')  # يجب أن تضبط متغير البيئة قبل التشغيل
 
 if not TOKEN:
     logger.error("لم يتم ضبط متغير البيئة BOT_TOKEN.")
@@ -38,24 +38,47 @@ if not TOKEN:
 else:
     logger.info("تم الحصول على BOT_TOKEN بنجاح.")
 
+# ------------------------------------------------------------------------
+# 1) التحقق من سماح الاستخدام (is_authorized)
+# ------------------------------------------------------------------------
 def is_authorized(user_id):
-    """تحقق ما إذا كان user_id مصرحاً له باستعمال البوت."""
+    """
+    يتحقق إذا كان user_id موجودًا في قائمة المسموح لهم.
+    عدّل allowed_users.py لتضمين معرفات المستخدمين المصرح لهم.
+    """
     return user_id in ALLOWED_USER_IDS
+
+# ------------------------------------------------------------------------
+# 2) دوال المساعدة في تحليل الأسئلة
+# ------------------------------------------------------------------------
+
+def preprocess_text_for_questions(text):
+    """
+    يحاول إدراج سطر جديد قبل 'Question:' (أو 'question:') إذا كانت ملتصقة بكلمة سابقة.
+    مثال: 
+        "edema.Question: Which metal ..." 
+    تتحوّل إلى:
+        "edema.\nQuestion: Which metal ..."
+    
+    هذا يضمن أن parse_multiple_mcqs سيكتشف سطرًا يبدأ بـ 'Question:'.
+    """
+    pattern = re.compile(r'([^\n])Question:\s*', re.IGNORECASE)
+    text = pattern.sub(r'\1\nQuestion: ', text)
+    return text
 
 def parse_single_mcq(text):
     """
-    تحلل نص سؤال واحد (MCQ) وتعيد:
-        (question, options, correct_option_index, explanation)
+    تحلل نص سؤال واحد (MCQ) وتعيد: (question, options, correct_option_index, explanation)
     أو تعيد (None, None, None, None) لو كان التنسيق خاطئ.
-
-    مثال تنسيق صحيح لسؤال واحد:
-        Question: نص السؤال
-        A) خيار أول
-        B) خيار ثاني
-        C) خيار ثالث
-        Correct Answer: B
-        Explanation: شرح مختصر
-
+    
+    الصيغة المتوقعة في كل سؤال:
+    Question: نص السؤال
+    A) خيار أول
+    B) خيار ثاني
+    ...
+    Correct Answer: A
+    Explanation: الشرح
+    
     - يدعم حتى 10 خيارات (A-J).
     """
     try:
@@ -100,7 +123,7 @@ def parse_single_mcq(text):
                 explanation = ex_match.group(1).strip()
                 continue
 
-        # التحقق من صحة البارسينغ
+        # تحقق من سلامة البارسينغ
         if not question:
             logger.warning("لم يتم العثور على سؤال (Question:) في MCQ.")
             return None, None, None, None
@@ -110,7 +133,7 @@ def parse_single_mcq(text):
             return None, None, None, None
 
         if len(options) > 10:
-            logger.warning("تجاوز عدد الخيارات 10 (هذا حد تيليجرام).")
+            logger.warning("تجاوز عدد الخيارات المسموح به (10).")
             return None, None, None, None
 
         if correct_option_index is None or correct_option_index >= len(options):
@@ -125,49 +148,48 @@ def parse_single_mcq(text):
 
 def parse_multiple_mcqs(text):
     """
-    تحلل نصاً كاملاً يمكن أن يحوي عدّة أسئلة.
-
-    الفاصل الأساسي هو سطر يبدأ بـ "Question:".
-    كل الأسطر التالية لهذا العنوان تعتبر تابعة للسؤال
-    إلى حين الوصول لسطر جديد يبدأ بـ "Question:" (سؤال جديد)،
-    أو نهاية النص.
-
-    تعيد قائمة من (question, options, correct_option_index, explanation).
+    تحلل نصاً كاملاً قد يحتوي على عدة أسئلة.
+    - تقسمه إلى كتل مستقلة مبنية على سطر يبدأ بـ 'Question:' (بعد المعالجة المسبقة).
+    - كل كتلة تمثل سؤالاً واحداً.
+    - تعيد قائمة [(question, options, correct_idx, explanation), ...].
     """
-    lines = text.split('\n')
+    # مرحلة المعالجة المسبقة لفصل "Question:" إن كانت ملتصقة بنقطة أو كلمة
+    text = preprocess_text_for_questions(text)
 
+    lines = text.split('\n')
     mcq_blocks = []
     current_block = []
 
-    # Regex لاكتشاف بداية سؤال
+    # Regex لاكتشاف سطر يبدأ بـ "Question:"
     question_header_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
 
     for line in lines:
-        # لو كان السطر يبدأ بـ "Question:"
-        # فهذا يعني بداية سؤال جديد
+        # إذا اكتشفنا سطرًا جديدًا يبدأ بـ Question: فهذا يعني بداية سؤال جديد
         if question_header_pattern.match(line.strip()):
-            # إذا لدينا بلوك سابق، نضيفه إلى القوائم
+            # لو لدينا بلوك سابق، نضيفه للقائمة
             if current_block:
                 mcq_blocks.append('\n'.join(current_block))
                 current_block = []
         current_block.append(line)
 
-    # إضافة آخر بلوك إن وجد
+    # إضافة آخر بلوك إذا لم يكن فارغًا
     if current_block:
         mcq_blocks.append('\n'.join(current_block))
 
     parsed_questions = []
     for block in mcq_blocks:
-        # نمرر كل بلوك (سؤال) للدالة parse_single_mcq
         q, opts, correct_idx, expl = parse_single_mcq(block)
-        # إذا كان التنسيق صالحاً نضيفه للقائمة
         if q and opts and correct_idx is not None:
             parsed_questions.append((q, opts, correct_idx, expl))
         else:
-            logger.warning("اكتُشِف بلوك غير صالح أو غير مكتمل (سيتم تجاهله).")
+            # بلوك لم ينجح تحليله، قد يكون تنسيقه خاطئاً
+            logger.warning("اكتُشِف بلوك غير صالح أو تنسيق خاطئ. سيتم تجاهله.")
 
     return parsed_questions
 
+# ------------------------------------------------------------------------
+# 3) النصوص الثابتة والرسائل
+# ------------------------------------------------------------------------
 UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : leave my bot buddy",
     "@iwanna2die : I can see you here",
@@ -192,19 +214,23 @@ INSTRUCTION_MESSAGE = (
     "D) خيار رابع\n"
     "Correct Answer: D\n"
     "Explanation: الشرح.\n\n"
-    "• يجب الانتباه للآتي:\n"
-    "  - أقصى عدد للخيارات هو 10 (A-J).\n"
-    "  - يجب ألا يتجاوز طول السؤال 300 حرف.\n"
-    "  - كل خيار تحت 100 حرف.\n"
-    "  - الشرح تحت 200 حرف.\n"
+    "— ملاحظات مهمة —\n"
+    "• أقصى عدد للخيارات: 10 (A-J).\n"
+    "• يجب ألا يتجاوز طول السؤال 300 حرف.\n"
+    "• يجب ألا يتجاوز طول أي خيار 100 حرف.\n"
+    "• يجب ألا يتجاوز طول الشرح 200 حرف.\n"
 )
 
+# ------------------------------------------------------------------------
+# 4) الدوال التي تتعامل مع التليجرام
+# ------------------------------------------------------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """التعامل مع أي رسالة نصية يرسلها المستخدم (باستثناء الأوامر)."""
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
     if is_authorized(user_id):
-        # حلّل النص للبحث عن أسئلة متعددة
+        # تحليل الرسالة للبحث عن أسئلة متعددة
         mcqs = parse_multiple_mcqs(text)
 
         if not mcqs:
@@ -212,25 +238,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(INSTRUCTION_MESSAGE)
             return
 
-        # لكل سؤال مستقل، نرسل استفتاء (Poll)
+        # سننشئ استفتاء لكل سؤال
         for (question, options, correct_option_index, explanation) in mcqs:
             # التحقق من أطوال النصوص
             if len(question) > 300:
                 logger.warning(f"سؤال تجاوز 300 حرف: {question}")
-                await update.message.reply_text("السؤال يجب أن يكون أقل من 300 حرف.")
+                await update.message.reply_text(
+                    "هناك سؤال تجاوز 300 حرف. يرجى اختصاره وإعادة الإرسال."
+                )
                 continue
 
             if any(len(option) > 100 for option in options):
                 logger.warning(f"أحد الخيارات تجاوز 100 حرف: {options}")
-                await update.message.reply_text("كل خيار يجب أن يكون أقل من 100 حرف.")
+                await update.message.reply_text(
+                    "أحد الخيارات تجاوز 100 حرف. يرجى اختصاره."
+                )
                 continue
 
             if explanation and len(explanation) > 200:
                 logger.warning(f"الشرح تجاوز 200 حرف: {explanation}")
-                await update.message.reply_text("الشرح يجب أن يكون أقل من 200 حرف.")
+                await update.message.reply_text(
+                    "الشرح تجاوز 200 حرف. يرجى اختصاره."
+                )
                 continue
 
-            # نرسل الاستفتاء
+            # إنشاء الاستفتاء
             try:
                 await update.message.reply_poll(
                     question=question,
@@ -239,11 +271,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     correct_option_id=correct_option_index,
                     explanation=explanation or None
                 )
-                logger.info(f"تم إرسال الاستفتاء بنجاح بواسطة {user_id}: {question}")
+                logger.info(f"تم إرسال الاستفتاء بنجاح بواسطة المستخدم {user_id}: {question}")
             except Exception as e:
                 logger.error(f"خطأ أثناء إرسال الاستفتاء: {e}")
                 await update.message.reply_text(f"فشل إرسال الاستفتاء. السبب: {e}")
-
     else:
         # مستخدم غير مصرح
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
@@ -251,10 +282,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """التعامل مع أمر /start."""
     user_id = update.effective_user.id
 
     if not is_authorized(user_id):
-        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
+        logger.warning(f"محاولة وصول غير مصرح بها من user ID: {user_id}")
         response = random.choice(UNAUTHORIZED_RESPONSES)
         await update.message.reply_text(response)
         return
@@ -262,18 +294,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user_id} initiated /start")
     await update.message.reply_text(
         "مرحباً بك في بوت الأسئلة (MCQ Bot)!\n\n"
-        "أرسل أسئلتك بالصيغة المتعددة كما هو موضّح في المثال.\n\n"
+        "أرسل أسئلتك بالصيغة المتعددة كما هو موضّح في المثال أدناه.\n\n"
         f"{INSTRUCTION_MESSAGE}"
     )
 
+# ------------------------------------------------------------------------
+# 5) الدالة الرئيسية لتشغيل البوت
+# ------------------------------------------------------------------------
 def main():
+    # بناء التطبيق (البوت) باستخدام التوكن
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # الأوامر والمعالجات
+    # ربط المعالجات
     application.add_handler(CommandHandler('start', start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot started...")
+    # تشغيل البوت
+    logger.info("Bot started... Press Ctrl+C to stop.")
     application.run_polling()
 
 if __name__ == '__main__':

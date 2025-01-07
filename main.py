@@ -19,26 +19,27 @@ from allowed_users import ALLOWED_USER_IDS
 # ----------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Set to INFO, adjust as needed
+    level=logging.INFO  # يمكنك تغييرها إلى DEBUG لرؤية رسائل التصحيح
 )
 logger = logging.getLogger(__name__)
 
-# Suppress verbose logs from 'telegram' libraries
+# تقليل إزعاج مكتبة telegram
 logging.getLogger('telegram').setLevel(logging.WARNING)
 logging.getLogger('telegram.ext').setLevel(logging.WARNING)
 
 # ----------------------
 # Telegram Bot Setup
 # ----------------------
-TOKEN = os.environ.get('BOT_TOKEN')
+TOKEN = os.environ.get('BOT_TOKEN')  # تأكد من ضبط المتغير البيئي
 
 if not TOKEN:
-    logger.error("BOT_TOKEN environment variable not set.")
+    logger.error("لم يتم ضبط متغير البيئة BOT_TOKEN.")
     exit(1)
 else:
-    logger.info("BOT_TOKEN successfully retrieved.")
+    logger.info("تم الحصول على BOT_TOKEN بنجاح.")
 
 def is_authorized(user_id):
+    """تحقق ما إذا كان user_id مصرحاً له باستعمال البوت."""
     return user_id in ALLOWED_USER_IDS
 
 def parse_single_mcq(text):
@@ -47,16 +48,17 @@ def parse_single_mcq(text):
         (question, options, correct_option_index, explanation)
     أو تعيد (None, None, None, None) لو كان التنسيق خاطئ.
 
-    الصيغة المتوقعة مثلاً:
-        Question: [سؤال]
-        a) [خيارات]
-        b) [خيارات]
-        ...
-        Correct Answer: a
-        Explanation: نص الشرح
+    مثال تنسيق صحيح لسؤال واحد:
+        Question: نص السؤال
+        A) خيار أول
+        B) خيار ثاني
+        C) خيار ثالث
+        Correct Answer: B
+        Explanation: شرح مختصر
+
+    - يدعم حتى 10 خيارات (A-J).
     """
     try:
-        # شطْر النص إلى أسطر
         lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
 
         question = ''
@@ -64,24 +66,23 @@ def parse_single_mcq(text):
         correct_option_index = None
         explanation = ''
 
-        # أنماط Regex للبحث
+        # Regex Patterns
         question_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
-        # حتى 10 خيارات: a-j
-        option_pattern = re.compile(r'^([a-jA-J])\)\s*(.+)$')
+        option_pattern = re.compile(r'^([a-jA-J])\)\s*(.+)$')  # مثل A) نص أو a) نص
         correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-jA-J])\)?', re.IGNORECASE)
         explanation_pattern = re.compile(r'^Explanation:\s*(.+)$', re.IGNORECASE)
 
         for line in lines:
-            # جملة السؤال
+            # السؤال
             q_match = question_pattern.match(line)
             if q_match:
                 question = q_match.group(1).strip()
                 continue
 
-            # الخيارات
+            # الخيار
             opt_match = option_pattern.match(line)
             if opt_match:
-                option_letter = opt_match.group(1).lower()
+                option_letter = opt_match.group(1).lower()  # a-j
                 option_text = opt_match.group(2).strip()
                 options.append(option_text)
                 continue
@@ -99,7 +100,7 @@ def parse_single_mcq(text):
                 explanation = ex_match.group(1).strip()
                 continue
 
-        # تحقق من صحة البيانات
+        # التحقق من صحة البارسينغ
         if not question:
             logger.warning("لم يتم العثور على سؤال (Question:) في MCQ.")
             return None, None, None, None
@@ -124,52 +125,49 @@ def parse_single_mcq(text):
 
 def parse_multiple_mcqs(text):
     """
-    تحلل نصاً كاملاً يمكن أن يحوي عدّة أسئلة MCQ.
+    تحلل نصاً كاملاً يمكن أن يحوي عدّة أسئلة.
 
-    - تعتبر بداية سؤال جديد هو أي سطر يشبه:
-        ^\d+\.\s*Question:
-      أو
-        ^Question:
-      (للمرونة في حال كتب المستخدم 1.Question أو كتب Question مباشرة)
-    - بعد أخذ كتلة السؤال، نستدعي parse_single_mcq عليها.
+    الفاصل الأساسي هو سطر يبدأ بـ "Question:".
+    كل الأسطر التالية لهذا العنوان تعتبر تابعة للسؤال
+    إلى حين الوصول لسطر جديد يبدأ بـ "Question:" (سؤال جديد)،
+    أو نهاية النص.
 
-    تعيد قائمة من (question, options, correct_option_index, explanation)
+    تعيد قائمة من (question, options, correct_option_index, explanation).
     """
-    # قسّم النص إلى أسطر
     lines = text.split('\n')
 
     mcq_blocks = []
     current_block = []
 
-    # نستخدم هذا النمط لاكتشاف بداية سؤال
-    # مثال: "1.Question:" أو "12.Question:" أو "Question:"
-    start_question_pattern = re.compile(r'^(\d+\.\s*)?Question:\s*(.+)$', re.IGNORECASE)
+    # Regex لاكتشاف بداية سؤال
+    question_header_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
 
     for line in lines:
-        # لو اكتشفنا بداية سؤال جديد
-        if start_question_pattern.match(line.strip()):
-            # إذا هناك كتلة سابقة، نحفظها
+        # لو كان السطر يبدأ بـ "Question:"
+        # فهذا يعني بداية سؤال جديد
+        if question_header_pattern.match(line.strip()):
+            # إذا لدينا بلوك سابق، نضيفه إلى القوائم
             if current_block:
                 mcq_blocks.append('\n'.join(current_block))
                 current_block = []
         current_block.append(line)
 
-    # أضف آخر كتلة (إن وجدت)
+    # إضافة آخر بلوك إن وجد
     if current_block:
         mcq_blocks.append('\n'.join(current_block))
 
-    # الآن نحلل كل كتلة على حدة باستخدام parse_single_mcq
     parsed_questions = []
     for block in mcq_blocks:
-        q, opts, idx, expl = parse_single_mcq(block)
-        if q and opts and idx is not None:
-            parsed_questions.append((q, opts, idx, expl))
+        # نمرر كل بلوك (سؤال) للدالة parse_single_mcq
+        q, opts, correct_idx, expl = parse_single_mcq(block)
+        # إذا كان التنسيق صالحاً نضيفه للقائمة
+        if q and opts and correct_idx is not None:
+            parsed_questions.append((q, opts, correct_idx, expl))
         else:
-            logger.warning("اكتُشِف بلوك غير صالح (سيتم تجاهله).")
+            logger.warning("اكتُشِف بلوك غير صالح أو غير مكتمل (سيتم تجاهله).")
 
     return parsed_questions
 
-# رسائل للمستخدمين غير المصرح لهم
 UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : leave my bot buddy",
     "@iwanna2die : I can see you here",
@@ -179,28 +177,26 @@ UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : ما عندك وصول للبوت حبيبي",
 ]
 
-# نص التعليمات للمستخدم المصرح
 INSTRUCTION_MESSAGE = (
-    "اكتب أسئلتك بالصيغة التالية (يمكنك وضع أكثر من سؤال في رسالة واحدة):\n\n"
-    "1.Question: The sacral promontory contributes to the border of which pelvic structure?\n"
-    "a) Pelvic outlet\n"
-    "b) Pubic arch\n"
-    "c) Pelvic inlet\n"
-    "d) Iliac fossa\n"
-    "Correct Answer: c\n"
-    "Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.\n\n"
-    "2.Question: The term saturnism refers to toxic symptoms produced by chronic ingestion of:\n"
-    "a) Lead\n"
-    "b) Arsenic\n"
-    "c) Cadmium\n"
-    "d) Zinc\n"
-    "Correct Answer: a\n"
-    "Explanation: Saturnism refers to lead poisoning.\n\n"
-    "مع الانتباه للشروط:\n"
-    " - أقصى عدد للخيارات 10.\n"
-    " - أقصى طول للسؤال 300 حرف.\n"
-    " - أقصى طول للخيار 100 حرف.\n"
-    " - أقصى طول للشرح 200 حرف.\n"
+    "أرسل أسئلتك بالصيغة التالية (يمكنك وضع أكثر من سؤال في رسالة واحدة):\n\n"
+    "Question: نص السؤال الأول\n"
+    "A) خيار أول\n"
+    "B) خيار ثاني\n"
+    "C) خيار ثالث\n"
+    "Correct Answer: B\n"
+    "Explanation: شرح مختصر حول الإجابة الصحيحة.\n\n"
+    "Question: نص السؤال الثاني\n"
+    "A) خيار أول\n"
+    "B) خيار ثاني\n"
+    "C) خيار ثالث\n"
+    "D) خيار رابع\n"
+    "Correct Answer: D\n"
+    "Explanation: الشرح.\n\n"
+    "• يجب الانتباه للآتي:\n"
+    "  - أقصى عدد للخيارات هو 10 (A-J).\n"
+    "  - يجب ألا يتجاوز طول السؤال 300 حرف.\n"
+    "  - كل خيار تحت 100 حرف.\n"
+    "  - الشرح تحت 200 حرف.\n"
 )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,9 +212,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(INSTRUCTION_MESSAGE)
             return
 
-        # أنشئ استفتاءً (Poll) لكل سؤال بنجاح
+        # لكل سؤال مستقل، نرسل استفتاء (Poll)
         for (question, options, correct_option_index, explanation) in mcqs:
-            # التحقق من الأطوال
+            # التحقق من أطوال النصوص
             if len(question) > 300:
                 logger.warning(f"سؤال تجاوز 300 حرف: {question}")
                 await update.message.reply_text("السؤال يجب أن يكون أقل من 300 حرف.")
@@ -234,6 +230,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("الشرح يجب أن يكون أقل من 200 حرف.")
                 continue
 
+            # نرسل الاستفتاء
             try:
                 await update.message.reply_poll(
                     question=question,
@@ -265,7 +262,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user_id} initiated /start")
     await update.message.reply_text(
         "مرحباً بك في بوت الأسئلة (MCQ Bot)!\n\n"
-        "أرسل أسئلتك بالصيغة المتعددة كما هو موضّح في المثال أدناه.\n\n"
+        "أرسل أسئلتك بالصيغة المتعددة كما هو موضّح في المثال.\n\n"
         f"{INSTRUCTION_MESSAGE}"
     )
 

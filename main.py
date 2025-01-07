@@ -30,7 +30,6 @@ logging.getLogger('telegram.ext').setLevel(logging.WARNING)
 # ----------------------
 # Telegram Bot Setup
 # ----------------------
-# Retrieve the bot token from environment variables
 TOKEN = os.environ.get('BOT_TOKEN')
 
 if not TOKEN:
@@ -42,50 +41,44 @@ else:
 def is_authorized(user_id):
     return user_id in ALLOWED_USER_IDS
 
-def parse_mcq(text):
+def parse_single_mcq(text):
     """
-    Parses the multi-line MCQ text and returns question, options, correct option index, and explanation.
+    تحلل نص سؤال واحد (MCQ) وتعيد:
+        (question, options, correct_option_index, explanation)
+    أو تعيد (None, None, None, None) لو كان التنسيق خاطئ.
 
-    Expected multi-line format:
-        Question: [question text]
-        a) [Option A]
-        b) [Option B]
-        c) [Option C]
-        d) [Option D]
-        Correct Answer: [option letter]
-        Explanation: [Explanation text]
-
-    Example:
-        Question: The sacral promontory contributes to the border of which pelvic structure?
-        a) Pelvic outlet
-        b) Pubic arch
-        c) Pelvic inlet
-        d) Iliac fossa
-        Correct Answer: c)
-        Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.
+    الصيغة المتوقعة مثلاً:
+        Question: [سؤال]
+        a) [خيارات]
+        b) [خيارات]
+        ...
+        Correct Answer: a
+        Explanation: نص الشرح
     """
     try:
-        # Split the text into lines and strip whitespace
+        # شطْر النص إلى أسطر
         lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
+
         question = ''
         options = []
         correct_option_index = None
         explanation = ''
 
-        # Define regex patterns
+        # أنماط Regex للبحث
         question_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
-        option_pattern = re.compile(r'^([a-dA-D])\)\s*(.+)$')
-        correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-dA-D])\)?', re.IGNORECASE)
+        # حتى 10 خيارات: a-j
+        option_pattern = re.compile(r'^([a-jA-J])\)\s*(.+)$')
+        correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-jA-J])\)?', re.IGNORECASE)
         explanation_pattern = re.compile(r'^Explanation:\s*(.+)$', re.IGNORECASE)
 
         for line in lines:
-            # Match question
+            # جملة السؤال
             q_match = question_pattern.match(line)
             if q_match:
                 question = q_match.group(1).strip()
                 continue
 
-            # Match options
+            # الخيارات
             opt_match = option_pattern.match(line)
             if opt_match:
                 option_letter = opt_match.group(1).lower()
@@ -93,37 +86,90 @@ def parse_mcq(text):
                 options.append(option_text)
                 continue
 
-            # Match correct answer
+            # الإجابة الصحيحة
             ca_match = correct_answer_pattern.match(line)
             if ca_match:
                 correct_option_letter = ca_match.group(1).lower()
                 correct_option_index = ord(correct_option_letter) - ord('a')
                 continue
 
-            # Match explanation
+            # الشرح
             ex_match = explanation_pattern.match(line)
             if ex_match:
                 explanation = ex_match.group(1).strip()
                 continue
 
-        # Validate parsed data
+        # تحقق من صحة البيانات
         if not question:
-            logger.warning("Question not found in the provided MCQ.")
-        elif len(options) < 2:
-            logger.warning("Insufficient options provided in the MCQ.")
-        elif correct_option_index is None or correct_option_index >= len(options):
-            logger.warning("Correct answer index is invalid.")
-        else:
-            # If validation passes, return the parsed components
-            return question, options, correct_option_index, explanation
+            logger.warning("لم يتم العثور على سؤال (Question:) في MCQ.")
+            return None, None, None, None
+
+        if len(options) < 2:
+            logger.warning("يجب توفير خيارين على الأقل.")
+            return None, None, None, None
+
+        if len(options) > 10:
+            logger.warning("تجاوز عدد الخيارات 10 (هذا حد تيليجرام).")
+            return None, None, None, None
+
+        if correct_option_index is None or correct_option_index >= len(options):
+            logger.warning("الإجابة الصحيحة غير صحيحة أو خارج نطاق الخيارات.")
+            return None, None, None, None
+
+        return question, options, correct_option_index, explanation
 
     except Exception as e:
-        logger.error(f"Error parsing MCQ: {e}")
+        logger.error(f"Error parsing single MCQ: {e}")
+        return None, None, None, None
 
-    # Ensure the function always returns four values
-    return None, None, None, None
+def parse_multiple_mcqs(text):
+    """
+    تحلل نصاً كاملاً يمكن أن يحوي عدّة أسئلة MCQ.
 
-# Predefined messages for unauthorized users
+    - تعتبر بداية سؤال جديد هو أي سطر يشبه:
+        ^\d+\.\s*Question:
+      أو
+        ^Question:
+      (للمرونة في حال كتب المستخدم 1.Question أو كتب Question مباشرة)
+    - بعد أخذ كتلة السؤال، نستدعي parse_single_mcq عليها.
+
+    تعيد قائمة من (question, options, correct_option_index, explanation)
+    """
+    # قسّم النص إلى أسطر
+    lines = text.split('\n')
+
+    mcq_blocks = []
+    current_block = []
+
+    # نستخدم هذا النمط لاكتشاف بداية سؤال
+    # مثال: "1.Question:" أو "12.Question:" أو "Question:"
+    start_question_pattern = re.compile(r'^(\d+\.\s*)?Question:\s*(.+)$', re.IGNORECASE)
+
+    for line in lines:
+        # لو اكتشفنا بداية سؤال جديد
+        if start_question_pattern.match(line.strip()):
+            # إذا هناك كتلة سابقة، نحفظها
+            if current_block:
+                mcq_blocks.append('\n'.join(current_block))
+                current_block = []
+        current_block.append(line)
+
+    # أضف آخر كتلة (إن وجدت)
+    if current_block:
+        mcq_blocks.append('\n'.join(current_block))
+
+    # الآن نحلل كل كتلة على حدة باستخدام parse_single_mcq
+    parsed_questions = []
+    for block in mcq_blocks:
+        q, opts, idx, expl = parse_single_mcq(block)
+        if q and opts and idx is not None:
+            parsed_questions.append((q, opts, idx, expl))
+        else:
+            logger.warning("اكتُشِف بلوك غير صالح (سيتم تجاهله).")
+
+    return parsed_questions
+
+# رسائل للمستخدمين غير المصرح لهم
 UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : leave my bot buddy",
     "@iwanna2die : I can see you here",
@@ -133,16 +179,28 @@ UNAUTHORIZED_RESPONSES = [
     "@iwanna2die : ما عندك وصول للبوت حبيبي",
 ]
 
-# Predefined instruction message for authorized users
+# نص التعليمات للمستخدم المصرح
 INSTRUCTION_MESSAGE = (
-    "Please use the following multi-line format to create an MCQ:\n\n"
-    "Question: The sacral promontory contributes to the border of which pelvic structure?\n"
+    "اكتب أسئلتك بالصيغة التالية (يمكنك وضع أكثر من سؤال في رسالة واحدة):\n\n"
+    "1.Question: The sacral promontory contributes to the border of which pelvic structure?\n"
     "a) Pelvic outlet\n"
     "b) Pubic arch\n"
     "c) Pelvic inlet\n"
     "d) Iliac fossa\n"
-    "Correct Answer: c)\n"
-    "Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet."
+    "Correct Answer: c\n"
+    "Explanation: The sacral promontory forms part of the posterior border of the pelvic inlet.\n\n"
+    "2.Question: The term saturnism refers to toxic symptoms produced by chronic ingestion of:\n"
+    "a) Lead\n"
+    "b) Arsenic\n"
+    "c) Cadmium\n"
+    "d) Zinc\n"
+    "Correct Answer: a\n"
+    "Explanation: Saturnism refers to lead poisoning.\n\n"
+    "مع الانتباه للشروط:\n"
+    " - أقصى عدد للخيارات 10.\n"
+    " - أقصى طول للسؤال 300 حرف.\n"
+    " - أقصى طول للخيار 100 حرف.\n"
+    " - أقصى طول للشرح 200 حرف.\n"
 )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -150,28 +208,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
     if is_authorized(user_id):
-        logger.debug(f"Authorized user {user_id} sent message: {text}")
-        # Parse the MCQ
-        question, options, correct_option_index, explanation = parse_mcq(text)
+        # حلّل النص للبحث عن أسئلة متعددة
+        mcqs = parse_multiple_mcqs(text)
 
-        if question and options and correct_option_index is not None:
-            # Validate lengths
+        if not mcqs:
+            # لم يتم التعرف على أي سؤال بصيغة صحيحة
+            await update.message.reply_text(INSTRUCTION_MESSAGE)
+            return
+
+        # أنشئ استفتاءً (Poll) لكل سؤال بنجاح
+        for (question, options, correct_option_index, explanation) in mcqs:
+            # التحقق من الأطوال
             if len(question) > 300:
-                logger.warning(f"Question exceeds 300 characters: {question}")
-                await update.message.reply_text("The question must be under 300 characters. Please shorten your question.")
-                return
+                logger.warning(f"سؤال تجاوز 300 حرف: {question}")
+                await update.message.reply_text("السؤال يجب أن يكون أقل من 300 حرف.")
+                continue
 
             if any(len(option) > 100 for option in options):
-                logger.warning(f"One or more options exceed 100 characters: {options}")
-                await update.message.reply_text("Each option must be under 100 characters. Please shorten your options.")
-                return
+                logger.warning(f"أحد الخيارات تجاوز 100 حرف: {options}")
+                await update.message.reply_text("كل خيار يجب أن يكون أقل من 100 حرف.")
+                continue
 
             if explanation and len(explanation) > 200:
-                logger.warning(f"Explanation exceeds 200 characters: {explanation}")
-                await update.message.reply_text("The explanation must be under 200 characters. Please shorten your explanation.")
-                return
+                logger.warning(f"الشرح تجاوز 200 حرف: {explanation}")
+                await update.message.reply_text("الشرح يجب أن يكون أقل من 200 حرف.")
+                continue
 
-            # Send the poll
             try:
                 await update.message.reply_poll(
                     question=question,
@@ -180,17 +242,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     correct_option_id=correct_option_index,
                     explanation=explanation or None
                 )
-                logger.info(f"Poll sent successfully by user {user_id}: {question}")
+                logger.info(f"تم إرسال الاستفتاء بنجاح بواسطة {user_id}: {question}")
             except Exception as e:
-                logger.error(f"Error sending poll: {e}")
-                await update.message.reply_text(f"Failed to send the poll. Error: {e}")
-        else:
-            # Invalid MCQ format; send the required format instructions
-            logger.warning(f"Authorized user {user_id} sent an invalid MCQ format.")
-            await update.message.reply_text(INSTRUCTION_MESSAGE)
+                logger.error(f"خطأ أثناء إرسال الاستفتاء: {e}")
+                await update.message.reply_text(f"فشل إرسال الاستفتاء. السبب: {e}")
+
     else:
+        # مستخدم غير مصرح
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        # Select a random response from the predefined list
         response = random.choice(UNAUTHORIZED_RESPONSES)
         await update.message.reply_text(response)
 
@@ -199,23 +258,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_authorized(user_id):
         logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        # Select a random response from the predefined list
         response = random.choice(UNAUTHORIZED_RESPONSES)
         await update.message.reply_text(response)
         return
 
     logger.info(f"User {user_id} initiated /start")
-    await update.message.reply_text("Welcome to the MCQ Bot! Send me your MCQs in the specified multi-line format.")
+    await update.message.reply_text(
+        "مرحباً بك في بوت الأسئلة (MCQ Bot)!\n\n"
+        "أرسل أسئلتك بالصيغة المتعددة كما هو موضّح في المثال أدناه.\n\n"
+        f"{INSTRUCTION_MESSAGE}"
+    )
 
 def main():
-    # Build the application
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # Add handlers
+    # الأوامر والمعالجات
     application.add_handler(CommandHandler('start', start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Start the bot
     logger.info("Bot started...")
     application.run_polling()
 

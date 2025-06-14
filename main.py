@@ -1,324 +1,321 @@
 import os
-import logging
+import json
 import re
-import asyncio
+import logging
+from logging.handlers import TimedRotatingFileHandler
+from datetime import time as dtime
 import random
+import asyncio
+
 from telegram import Update, Poll
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
     MessageHandler,
     CommandHandler,
+    PollHandler,
+    PollAnswerHandler,
     filters,
 )
 
-from allowed_users import ALLOWED_USER_IDS  # Make sure it's set up properly
-
 # ----------------------
-# Configure Logging
+# 0) Configuration
 # ----------------------
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Switch to DEBUG for more detailed logs
-)
-logger = logging.getLogger(__name__)
-
-# Reduce verbosity of telegram library
-logging.getLogger('telegram').setLevel(logging.WARNING)
-logging.getLogger('telegram.ext').setLevel(logging.WARNING)
-
-# ----------------------
-# Telegram Bot Setup
-# ----------------------
-TOKEN = os.environ.get('BOT_TOKEN')  # Must be set as an environment variable
+TOKEN = os.environ.get('BOT_TOKEN')
+ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')  # Optional: receive error alerts
 
 if not TOKEN:
-    logger.error("Environment variable BOT_TOKEN is not set.")
-    exit(1)
-else:
-    logger.info("BOT_TOKEN acquired successfully.")
+    raise RuntimeError("Environment variable BOT_TOKEN is not set.")
 
-# ------------------------------------------------------------------------
-# 1) Authorization Check (is_authorized)
-# ------------------------------------------------------------------------
-def is_authorized(user_id):
-    """
-    Checks whether user_id is in the list of allowed users.
-    Make sure 'allowed_users.py' contains the authorized user IDs.
-    """
+# ----------------------
+# 1) Rotating & Structured Logging
+# ----------------------
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Console handler
+console_h = logging.StreamHandler()
+console_h.setLevel(logging.INFO)
+console_fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+console_h.setFormatter(console_fmt)
+logger.addHandler(console_h)
+
+# File handler (rotates at midnight, keeps 7 days)
+file_h = TimedRotatingFileHandler('bot.log', when='midnight', backupCount=7, encoding='utf-8')
+file_fmt = logging.Formatter('{"timestamp":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","message":"%(message)s"}')
+file_h.setFormatter(file_fmt)
+logger.addHandler(file_h)
+
+# ----------------------
+# 2) Dynamic Authorization via JSON file
+# ----------------------
+ALLOWED_USERS_FILE = 'allowed_users.json'
+
+def load_allowed_users():
+    if os.path.exists(ALLOWED_USERS_FILE):
+        with open(ALLOWED_USERS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    else:
+        try:
+            from allowed_users import ALLOWED_USER_IDS
+            save_allowed_users(ALLOWED_USER_IDS)
+            return ALLOWED_USER_IDS
+        except ImportError:
+            return []
+
+def save_allowed_users(user_ids):
+    with open(ALLOWED_USERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(user_ids, f)
+
+ALLOWED_USER_IDS = load_allowed_users()
+
+def is_authorized(user_id: int) -> bool:
     return user_id in ALLOWED_USER_IDS
 
-# ------------------------------------------------------------------------
-# 2) Helper Functions for Parsing Questions
-# ------------------------------------------------------------------------
+# ----------------------
+# 3) Authorization Commands: /adduser & /removeuser
+# ----------------------
+async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    requester = update.effective_user.id
+    if not is_authorized(requester):
+        await update.message.reply_text("🔒 You’re not allowed to add users.")
+        return
 
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await update.message.reply_text("Usage: /adduser <user_id>")
+        return
+
+    new_id = int(context.args[0])
+    if new_id in ALLOWED_USER_IDS:
+        await update.message.reply_text(f"User {new_id} is already authorized.")
+    else:
+        ALLOWED_USER_IDS.append(new_id)
+        save_allowed_users(ALLOWED_USER_IDS)
+        await update.message.reply_text(f"✅ Added user {new_id} to allowed list.")
+
+async def removeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    requester = update.effective_user.id
+    if not is_authorized(requester):
+        await update.message.reply_text("🔒 You’re not allowed to remove users.")
+        return
+
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await update.message.reply_text("Usage: /removeuser <user_id>")
+        return
+
+    rem_id = int(context.args[0])
+    if rem_id not in ALLOWED_USER_IDS:
+        await update.message.reply_text(f"User {rem_id} is not in the allowed list.")
+    else:
+        ALLOWED_USER_IDS.remove(rem_id)
+        save_allowed_users(ALLOWED_USER_IDS)
+        await update.message.reply_text(f"❌ Removed user {rem_id} from allowed list.")
+
+# ----------------------
+# 4) Error Handler (global)
+# ----------------------
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("Exception while handling an update:", exc_info=context.error)
+    if ADMIN_CHAT_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=int(ADMIN_CHAT_ID),
+                text=f"🚨 Error: {context.error}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send error alert: {e}")
+
+# ----------------------
+# 5) Helpers for MCQ Parsing (unchanged)
+# ----------------------
 def preprocess_text_for_questions(text):
-    """
-    Inserts a newline before 'Question:' if it's stuck to a previous word.
-    For example:
-        "edema.Question: Which metal ..."
-    becomes:
-        "edema.\nQuestion: Which metal ..."
-
-    This helps parse_multiple_mcqs detect a line starting with 'Question:'.
-    """
     pattern = re.compile(r'([^\n])Question:\s*', re.IGNORECASE)
-    text = pattern.sub(r'\1\nQuestion: ', text)
-    return text
+    return pattern.sub(r'\1\nQuestion: ', text)
 
 def parse_single_mcq(text):
-    """
-    Parses a single MCQ block and returns: (question, options, correct_option_index, explanation),
-    or (None, None, None, None) if there's a formatting issue.
-
-    Expected format in each question block:
-    Question: <question text>
-    A) first option
-    B) second option
-    ...
-    Correct Answer: A
-    Explanation: <some explanation>
-
-    - Up to 10 options (A-J) are supported.
-    """
     try:
-        lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
-
-        question = ''
-        options = []
-        correct_option_index = None
-        explanation = ''
-
-        # Regex Patterns
-        question_pattern = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
-        option_pattern = re.compile(r'^([a-jA-J])\)\s*(.+)$')  # e.g. A) text or a) text
-        correct_answer_pattern = re.compile(r'^Correct Answer:\s*([a-jA-J])\)?', re.IGNORECASE)
-        explanation_pattern = re.compile(r'^Explanation:\s*(.+)$', re.IGNORECASE)
+        lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
+        question, options, correct_idx, explanation = '', [], None, ''
+        q_pat = re.compile(r'^Question:\s*(.+)$', re.IGNORECASE)
+        o_pat = re.compile(r'^([A-Ja-j])\)\s*(.+)$')
+        ca_pat = re.compile(r'^Correct Answer:\s*([A-Ja-j])', re.IGNORECASE)
+        ex_pat = re.compile(r'^Explanation:\s*(.+)$', re.IGNORECASE)
 
         for line in lines:
-            # Question
-            q_match = question_pattern.match(line)
-            if q_match:
-                question = q_match.group(1).strip()
-                continue
+            if m := q_pat.match(line):
+                question = m.group(1).strip()
+            elif m := o_pat.match(line):
+                options.append(m.group(2).strip())
+            elif m := ca_pat.match(line):
+                correct_idx = ord(m.group(1).lower()) - ord('a')
+            elif m := ex_pat.match(line):
+                explanation = m.group(1).strip()
 
-            # Option
-            opt_match = option_pattern.match(line)
-            if opt_match:
-                option_letter = opt_match.group(1).lower()  # a-j
-                option_text = opt_match.group(2).strip()
-                options.append(option_text)
-                continue
-
-            # Correct Answer
-            ca_match = correct_answer_pattern.match(line)
-            if ca_match:
-                correct_option_letter = ca_match.group(1).lower()
-                correct_option_index = ord(correct_option_letter) - ord('a')
-                continue
-
-            # Explanation
-            ex_match = explanation_pattern.match(line)
-            if ex_match:
-                explanation = ex_match.group(1).strip()
-                continue
-
-        # Validity checks
-        if not question:
-            logger.warning("No question found (missing 'Question:' line).")
+        if not question or len(options) < 2 or correct_idx is None or correct_idx >= len(options):
             return None, None, None, None
-
-        if len(options) < 2:
-            logger.warning("At least two options are required.")
-            return None, None, None, None
-
-        if len(options) > 10:
-            logger.warning("Exceeded the maximum allowed options (10).")
-            return None, None, None, None
-
-        if correct_option_index is None or correct_option_index >= len(options):
-            logger.warning("Invalid or out-of-range correct answer index.")
-            return None, None, None, None
-
-        return question, options, correct_option_index, explanation
-
+        return question, options, correct_idx, explanation
     except Exception as e:
-        logger.error(f"Error parsing single MCQ: {e}")
+        logger.error(f"parse_single_mcq error: {e}")
         return None, None, None, None
 
 def parse_multiple_mcqs(text):
-    """
-    Parses a text that may contain multiple questions.
-    - Splits it into blocks based on a line that looks like "Question: ..." or
-      "Question 1: ...", "Question #2: ...", "Q2:", "Q No. 2:", etc.
-    - Each block is treated as a single question.
-    - Returns a list of tuples (question, options, correct_idx, explanation).
-    """
-
-    # Preprocess "Question:" to be on its own line if previously stuck to a word
     text = preprocess_text_for_questions(text)
-
-    lines = text.split('\n')
-    mcq_blocks = []
-    current_block = []
-
-    # This pattern tries to catch multiple forms:
-    # - "Question: ...", "Question 1: ...", "Question #1: ...",
-    # - "Question No. 2: ...", "Q 3: ...", "Q: ..." etc.
-    # We end with ":" to separate the question text.
-    question_header_pattern = re.compile(
-        r'^\s*(?:Question(?:\s*(?:No\.?|#)\s*\d+|\s*\d+)?|Q\s*\d+|Q)\s*:\s*(.+)$',
-        re.IGNORECASE
+    header_re = re.compile(
+        r'^\s*(?:Question(?:\s*(?:No\.?|#)\s*\d+|\s*\d+)?|Q\s*\d+|Q)\s*:\s*', re.IGNORECASE
     )
+    blocks, current = [], []
+    for line in text.split('\n'):
+        if header_re.match(line.strip()) and current:
+            blocks.append('\n'.join(current))
+            current = []
+        current.append(line)
+    if current:
+        blocks.append('\n'.join(current))
 
-    for line in lines:
-        stripped_line = line.strip()
-        if question_header_pattern.match(stripped_line):
-            # If there's a previous block, finalize it
-            if current_block:
-                mcq_blocks.append('\n'.join(current_block))
-                current_block = []
-        current_block.append(line)
-
-    # Add the last block if not empty
-    if current_block:
-        mcq_blocks.append('\n'.join(current_block))
-
-    parsed_questions = []
-    for block in mcq_blocks:
-        q, opts, correct_idx, expl = parse_single_mcq(block)
-        if q and opts and correct_idx is not None:
-            parsed_questions.append((q, opts, correct_idx, expl))
+    parsed = []
+    for blk in blocks:
+        q, opts, idx, exp = parse_single_mcq(blk)
+        if q:
+            parsed.append((q, opts, idx, exp))
         else:
-            # Invalid block or formatting issue
-            logger.warning("Invalid block or formatting error encountered. Ignoring this block.")
-
-    return parsed_questions
-
-# ------------------------------------------------------------------------
-# 3) Texts / Messages
-# ------------------------------------------------------------------------
-UNAUTHORIZED_RESPONSES = [
-    "You are not authorized to use this bot.",
-    "Sorry, you do not have access rights for this bot.",
-    "This bot is restricted. You cannot use it.",
-    "Access denied.",
-    "You are not in the allowed list of users."
-]
+            logger.warning("Ignoring malformed question block.")
+    return parsed
 
 INSTRUCTION_MESSAGE = (
-    "Please send your questions in the following format (multiple questions allowed in one message):\n\n"
-    "Question: Your first question text\n"
-    "A) First option\n"
-    "B) Second option\n"
-    "C) Third option\n"
+    "Send questions in this format:\n\n"
+    "Question: Your question text\n"
+    "A) Option 1\n"
+    "B) Option 2\n"
+    "...\n"
     "Correct Answer: B\n"
-    "Explanation: Brief explanation.\n\n"
-    "Question: Your second question text\n"
-    "A) First option\n"
-    "B) Second option\n"
-    "C) Third option\n"
-    "D) Fourth option\n"
-    "Correct Answer: D\n"
-    "Explanation: Brief explanation.\n\n"
-    "-- Important Notes --\n"
-    "• Maximum number of options: 10 (A-J).\n"
-    "• A question cannot exceed 300 characters.\n"
-    "• Any option cannot exceed 100 characters.\n"
-    "• The explanation cannot exceed 200 characters.\n"
+    "Explanation: Your explanation\n\n"
+    "• Max 10 options (A–J)\n"
+    "• Question ≤ 300 chars\n"
+    "• Each option ≤ 100 chars\n"
+    "• Explanation ≤ 200 chars"
 )
 
-# ------------------------------------------------------------------------
-# 4) Telegram Handlers
-# ------------------------------------------------------------------------
+# ----------------------
+# 6) MCQ Handler
+# ----------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles any text message (except commands)."""
     user_id = update.effective_user.id
-    text = update.message.text.strip()
-
-    if is_authorized(user_id):
-        # Parse the message for multiple MCQs
-        mcqs = parse_multiple_mcqs(text)
-
-        if not mcqs:
-            # Could not detect any properly formatted questions
-            await update.message.reply_text(INSTRUCTION_MESSAGE)
-            return
-
-        # Create a poll for each question
-        for (question, options, correct_option_index, explanation) in mcqs:
-            # Check text lengths
-            if len(question) > 300:
-                logger.warning(f"Question exceeds 300 characters: {question}")
-                await update.message.reply_text(
-                    "One of your questions exceeds 300 characters. Please shorten it."
-                )
-                continue
-
-            if any(len(option) > 100 for option in options):
-                logger.warning(f"One of the options exceeds 100 characters: {options}")
-                await update.message.reply_text(
-                    "One of the options exceeds 100 characters. Please shorten it."
-                )
-                continue
-
-            if explanation and len(explanation) > 200:
-                logger.warning(f"Explanation exceeds 200 characters: {explanation}")
-                await update.message.reply_text(
-                    "Your explanation exceeds 200 characters. Please shorten it."
-                )
-                continue
-
-            # Send the poll
-            try:
-                await update.message.reply_poll(
-                    question=question,
-                    options=options,
-                    type=Poll.QUIZ,
-                    correct_option_id=correct_option_index,
-                    explanation=explanation or None
-                )
-                logger.info(f"Poll created successfully by user {user_id}: {question}")
-            except Exception as e:
-                logger.error(f"Error sending poll: {e}")
-                await update.message.reply_text(f"Failed to send poll. Reason: {e}")
-    else:
-        # Unauthorized user
-        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        response = random.choice(UNAUTHORIZED_RESPONSES)
-        await update.message.reply_text(response)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /start command."""
-    user_id = update.effective_user.id
-
     if not is_authorized(user_id):
-        logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-        response = random.choice(UNAUTHORIZED_RESPONSES)
-        await update.message.reply_text(response)
+        await update.message.reply_text("🚫 You are not authorized to use this bot.")
         return
 
-    logger.info(f"User {user_id} issued /start")
+    mcqs = parse_multiple_mcqs(update.message.text)
+    if not mcqs:
+        await update.message.reply_text(INSTRUCTION_MESSAGE)
+        return
+
+    for question, options, correct_idx, explanation in mcqs:
+        if len(question) > 300:
+            await update.message.reply_text("One question exceeds 300 characters. Please shorten it.")
+            continue
+        if any(len(opt) > 100 for opt in options):
+            await update.message.reply_text("One of the options exceeds 100 characters. Please shorten it.")
+            continue
+        if explanation and len(explanation) > 200:
+            await update.message.reply_text("Your explanation exceeds 200 characters. Please shorten it.")
+            continue
+
+        try:
+            await update.message.reply_poll(
+                question=question,
+                options=options,
+                type=Poll.QUIZ,
+                correct_option_id=correct_idx,
+                explanation=explanation or None
+            )
+            logger.info(f"Poll sent: {question}")
+        except Exception as e:
+            logger.error(f"Failed to send poll: {e}")
+            await update.message.reply_text(f"❌ Failed to send poll: {e}")
+
+# ----------------------
+# 7) Poll Tracking Handlers
+# ----------------------
+async def handle_poll_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    poll: Poll = update.poll
+    logger.info(f"Poll updated: id={poll.id!r}, question={poll.question!r}, total_voters={poll.total_voter_count}")
+
+async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    answer = update.poll_answer
+    logger.info(
+        f"User {answer.user.id} answered poll {answer.poll_id!r}: options={answer.option_ids}"
+    )
+    # Optionally, DM the user:
+    # await context.bot.send_message(answer.user.id, "Thanks for voting!")
+
+# ----------------------
+# 8) Scheduling with JobQueue
+# ----------------------
+async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    await context.bot.send_message(chat_id=job.chat_id, text=job.data)
+
+async def schedule_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await update.message.reply_text("🚫 You are not authorized.")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /schedule_reminder HH:MM your reminder text")
+        return
+
+    timestr = context.args[0]
+    try:
+        hh, mm = map(int, timestr.split(':'))
+        remind_time = dtime(hour=hh, minute=mm)
+    except:
+        await update.message.reply_text("Invalid time format. Use HH:MM (24h).")
+        return
+
+    text = ' '.join(context.args[1:])
+    context.job_queue.run_daily(
+        reminder_callback,
+        time=remind_time,
+        chat_id=update.effective_chat.id,
+        data=text,
+        name=f"reminder_{update.effective_chat.id}_{timestr}"
+    )
+    await update.message.reply_text(f"⏰ Reminder scheduled every day at {timestr}.")
+
+# ----------------------
+# 9) /start & Main
+# ----------------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await update.message.reply_text("🚫 You are not authorized.")
+        return
+
     await update.message.reply_text(
-        "Welcome to the MCQ Bot!\n\n"
-        "Send your questions in multiple format as shown below.\n\n"
-        f"{INSTRUCTION_MESSAGE}"
+        "🤖 Welcome to the enhanced MCQ Bot!\n\n" + INSTRUCTION_MESSAGE
     )
 
-# ------------------------------------------------------------------------
-# 5) Main function to run the bot
-# ------------------------------------------------------------------------
 def main():
-    # Build the application (bot) using the token
-    application = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
-    # Register handlers
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Core handlers
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('adduser', adduser))
+    app.add_handler(CommandHandler('removeuser', removeuser))
+    app.add_handler(CommandHandler('schedule_reminder', schedule_reminder))
 
-    # Run the bot
-    logger.info("Bot started... Press Ctrl+C to stop.")
-    application.run_polling()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Poll tracking
+    app.add_handler(PollHandler(handle_poll_update))
+    app.add_handler(PollAnswerHandler(handle_poll_answer))
+
+    # Global error handler
+    app.add_error_handler(error_handler)
+
+    logger.info("Starting bot...")
+    app.run_polling()
 
 if __name__ == '__main__':
     main()

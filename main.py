@@ -23,7 +23,7 @@ from telegram.ext import (
 # ----------------------
 TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')  # Optional: receive error alerts
-ADMIN_ID = 6177929931   # <— your single admin
+ADMIN_ID = 6177929931   # ← only this user has admin powers
 
 if not TOKEN:
     raise RuntimeError("Environment variable BOT_TOKEN is not set.")
@@ -34,16 +34,16 @@ if not TOKEN:
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Console handler
 console_h = logging.StreamHandler()
 console_h.setLevel(logging.INFO)
 console_fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console_h.setFormatter(console_fmt)
 logger.addHandler(console_h)
 
-# File handler (rotates at midnight, keeps 7 days)
 file_h = TimedRotatingFileHandler('bot.log', when='midnight', backupCount=7, encoding='utf-8')
-file_fmt = logging.Formatter('{"timestamp":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","message":"%(message)s"}')
+file_fmt = logging.Formatter(
+    '{"timestamp":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","message":"%(message)s"}'
+)
 file_h.setFormatter(file_fmt)
 logger.addHandler(file_h)
 
@@ -51,6 +51,10 @@ logger.addHandler(file_h)
 # 2) Dynamic Authorization via JSON file
 # ----------------------
 ALLOWED_USERS_FILE = 'allowed_users.json'
+
+def save_allowed_users(user_ids):
+    with open(ALLOWED_USERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(user_ids, f)
 
 def load_allowed_users():
     if os.path.exists(ALLOWED_USERS_FILE):
@@ -63,10 +67,6 @@ def load_allowed_users():
             return ALLOWED_USER_IDS
         except ImportError:
             return []
-
-def save_allowed_users(user_ids):
-    with open(ALLOWED_USERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(user_ids, f)
 
 ALLOWED_USER_IDS = load_allowed_users()
 
@@ -213,15 +213,24 @@ INSTRUCTION_MESSAGE = (
 )
 
 # ----------------------
-# 7) MCQ Handler
+# 7) MCQ Handler + Secret-word onboarding
 # ----------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    # 1) Secret word flow for newcomers
     if not is_authorized(user_id):
-        await update.message.reply_text("🚫 You are not authorized to use this bot.")
+        if text.lower() == 'admin':
+            ALLOWED_USER_IDS.append(user_id)
+            save_allowed_users(ALLOWED_USER_IDS)
+            await update.message.reply_text("✅ You’ve been granted access! You can now use the bot.")
+        else:
+            await update.message.reply_text("🚫 You’re not authorized. Send ‘Admin’ to gain access.")
         return
 
-    mcqs = parse_multiple_mcqs(update.message.text)
+    # 2) Authorized users → MCQ parsing
+    mcqs = parse_multiple_mcqs(text)
     if not mcqs:
         await update.message.reply_text(INSTRUCTION_MESSAGE)
         return
@@ -255,7 +264,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------------
 async def handle_poll_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     poll: Poll = update.poll
-    logger.info(f"Poll updated: id={poll.id!r}, question={poll.question!r}, total_voters={poll.total_voter_count}")
+    logger.info(
+        f"Poll updated: id={poll.id!r}, question={poll.question!r}, total_voters={poll.total_voter_count}"
+    )
 
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = update.poll_answer
@@ -304,7 +315,7 @@ async def schedule_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_authorized(user_id):
-        await update.message.reply_text("🚫 You are not authorized.")
+        await update.message.reply_text("🚫 You are not authorized. Send ‘Admin’ to gain access.")
         return
 
     await update.message.reply_text(
@@ -316,12 +327,13 @@ def main():
 
     # Core handlers
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('adduser', adduser))       # original
-    app.add_handler(CommandHandler('add', adduser))           # alias for admin
+    app.add_handler(CommandHandler('adduser', adduser))
+    app.add_handler(CommandHandler('add', adduser))           # alias
     app.add_handler(CommandHandler('removeuser', removeuser))
     app.add_handler(CommandHandler('help', help_command))     # admin-only help
     app.add_handler(CommandHandler('schedule_reminder', schedule_reminder))
 
+    # catch-all for text → MCQ or secret-word onboarding
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Poll tracking

@@ -226,7 +226,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_allowed_users(ALLOWED_USER_IDS)
             await update.message.reply_text("✅ You’ve been granted access! You can now use the bot.")
         else:
-            await update.message.reply_text("🚫 You’re not authorized. Send ‘Admin’ to gain access.")
+            await update.message.reply_text("🚫 You’re not authoriz.")
         return
 
     # 2) Authorized users → MCQ parsing

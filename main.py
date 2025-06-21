@@ -78,14 +78,11 @@ def is_authorized(user_id: int) -> bool:
 # ----------------------
 async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     requester = update.effective_user.id
-    # only the single ADMIN_ID may add:
     if requester != ADMIN_ID:
-        await update.message.reply_text("🔒 Only the admin can add users.")
-        return
+        return await update.message.reply_text("🔒 Only the admin can add users.")
 
     if len(context.args) != 1 or not context.args[0].isdigit():
-        await update.message.reply_text("Usage: /add <user_id>")
-        return
+        return await update.message.reply_text("Usage: /add <user_id>")
 
     new_id = int(context.args[0])
     if new_id in ALLOWED_USER_IDS:
@@ -98,12 +95,10 @@ async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def removeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     requester = update.effective_user.id
     if not is_authorized(requester):
-        await update.message.reply_text("🔒 You’re not allowed to remove users.")
-        return
+        return await update.message.reply_text("🔒 You’re not allowed to remove users.")
 
     if len(context.args) != 1 or not context.args[0].isdigit():
-        await update.message.reply_text("Usage: /removeuser <user_id>")
-        return
+        return await update.message.reply_text("Usage: /removeuser <user_id>")
 
     rem_id = int(context.args[0])
     if rem_id not in ALLOWED_USER_IDS:
@@ -213,27 +208,26 @@ INSTRUCTION_MESSAGE = (
 )
 
 # ----------------------
-# 7) MCQ Handler + Secret-word onboarding
+# 7) MCQ Handler + Secret-word Onboarding
 # ----------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    # 1) Secret word flow for newcomers
+    # New users: silently check for secret word but never hint at it
     if not is_authorized(user_id):
         if text.lower() == 'admin':
             ALLOWED_USER_IDS.append(user_id)
             save_allowed_users(ALLOWED_USER_IDS)
             await update.message.reply_text("✅ You’ve been granted access! You can now use the bot.")
         else:
-            await update.message.reply_text("🚫 You’re not authoriz.")
+            await update.message.reply_text("🚫 You are not authorized to use this bot.")
         return
 
-    # 2) Authorized users → MCQ parsing
+    # Authorized → MCQ parsing
     mcqs = parse_multiple_mcqs(text)
     if not mcqs:
-        await update.message.reply_text(INSTRUCTION_MESSAGE)
-        return
+        return await update.message.reply_text(INSTRUCTION_MESSAGE)
 
     for question, options, correct_idx, explanation in mcqs:
         if len(question) > 300:
@@ -284,20 +278,17 @@ async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
 async def schedule_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_authorized(user_id):
-        await update.message.reply_text("🚫 You are not authorized.")
-        return
+        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
 
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /schedule_reminder HH:MM your reminder text")
-        return
+        return await update.message.reply_text("Usage: /schedule_reminder HH:MM your reminder text")
 
     timestr = context.args[0]
     try:
         hh, mm = map(int, timestr.split(':'))
         remind_time = dtime(hour=hh, minute=mm)
     except:
-        await update.message.reply_text("Invalid time format. Use HH:MM (24h).")
-        return
+        return await update.message.reply_text("Invalid time format. Use HH:MM (24h).")
 
     text = ' '.join(context.args[1:])
     context.job_queue.run_daily(
@@ -315,8 +306,7 @@ async def schedule_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_authorized(user_id):
-        await update.message.reply_text("🚫 You are not authorized. Send ‘Admin’ to gain access.")
-        return
+        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
 
     await update.message.reply_text(
         "🤖 Welcome to the enhanced MCQ Bot!\n\n" + INSTRUCTION_MESSAGE
@@ -330,10 +320,10 @@ def main():
     app.add_handler(CommandHandler('adduser', adduser))
     app.add_handler(CommandHandler('add', adduser))           # alias
     app.add_handler(CommandHandler('removeuser', removeuser))
-    app.add_handler(CommandHandler('help', help_command))     # admin-only help
+    app.add_handler(CommandHandler('help', help_command))
     app.add_handler(CommandHandler('schedule_reminder', schedule_reminder))
 
-    # catch-all for text → MCQ or secret-word onboarding
+    # catch-all text → MCQ or onboarding
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Poll tracking

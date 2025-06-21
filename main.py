@@ -78,6 +78,7 @@ def is_authorized(user_id: int) -> bool:
 # ----------------------
 async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     requester = update.effective_user.id
+    logger.info(f"[/add] invoked by user {requester} args={context.args}")
     if requester != ADMIN_ID:
         await update.message.reply_text("🔒 Only the admin can add users.")
         return
@@ -96,6 +97,7 @@ async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def removeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     requester = update.effective_user.id
+    logger.info(f"[/removeuser] invoked by user {requester} args={context.args}")
     if not is_authorized(requester):
         await update.message.reply_text("🔒 You’re not allowed to remove users.")
         return
@@ -122,7 +124,9 @@ HELP_TEXT = (
     "/start — restart the bot\n"
 )
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    user_id = update.effective_user.id
+    logger.info(f"[/help] invoked by user {user_id}")
+    if user_id != ADMIN_ID:
         return await update.message.reply_text("🔒 This command is for the bot admin only.")
     await update.message.reply_markdown(HELP_TEXT)
 
@@ -217,8 +221,9 @@ INSTRUCTION_MESSAGE = (
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
+    logger.info(f"[message] from user {user_id}: {text}")
 
-    # 1) Secret-word flow
+    # 1) Secret-word flow for newcomers
     if not is_authorized(user_id):
         if text.lower() == 'admin':
             ALLOWED_USER_IDS.append(user_id)
@@ -231,8 +236,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2) Authorized users → MCQ parsing
     mcqs = parse_multiple_mcqs(text)
     if not mcqs:
-        await update.message.reply_text(INSTRUCTION_MESSAGE)
-        return
+        return await update.message.reply_text(INSTRUCTION_MESSAGE)
 
     for question, options, correct_idx, explanation in mcqs:
         if len(question) > 300:
@@ -282,6 +286,7 @@ async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
 
 async def schedule_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    logger.info(f"[/schedule_reminder] invoked by user {user_id} args={context.args}")
     if not is_authorized(user_id):
         return await update.message.reply_text("🚫 You are not authorized.")
 
@@ -310,6 +315,7 @@ async def schedule_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    logger.info(f"[/start] invoked by user {user_id}")
     if not is_authorized(user_id):
         await update.message.reply_text("🚫 You are not authorized.")
         return

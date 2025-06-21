@@ -4,7 +4,6 @@ import re
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from datetime import time as dtime
-import random
 import asyncio
 
 from telegram import Update, Poll
@@ -40,7 +39,9 @@ console_fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console_h.setFormatter(console_fmt)
 logger.addHandler(console_h)
 
-file_h = TimedRotatingFileHandler('bot.log', when='midnight', backupCount=7, encoding='utf-8')
+file_h = TimedRotatingFileHandler(
+    'bot.log', when='midnight', backupCount=7, encoding='utf-8'
+)
 file_fmt = logging.Formatter(
     '{"timestamp":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","message":"%(message)s"}'
 )
@@ -74,18 +75,25 @@ def is_authorized(user_id: int) -> bool:
     return user_id in ALLOWED_USER_IDS
 
 # ----------------------
-# 3) Authorization Commands: /adduser & /removeuser
+# 3) Clear existing webhook before polling
+# ----------------------
+async def drop_webhook(application):
+    # Remove any webhook to avoid Conflict errors when polling
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Webhook cleared; ready for polling.")
+
+# ----------------------
+# 4) Authorization Commands: /add & /removeuser
 # ----------------------
 async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    requester = update.effective_user.id
-    logger.info(f"[/add] invoked by user {requester} args={context.args}")
-    if requester != ADMIN_ID:
-        await update.message.reply_text("🔒 Only the admin can add users.")
-        return
+    user = update.effective_user
+    uid, uname = user.id, user.username
+    logger.info(f"[/add] invoked by {uid} ({uname}) args={context.args}")
+    if uid != ADMIN_ID:
+        return await update.message.reply_text("🔒 Only the admin can add users.")
 
     if len(context.args) != 1 or not context.args[0].isdigit():
-        await update.message.reply_text("Usage: /add <user_id>")
-        return
+        return await update.message.reply_text("Usage: /add <user_id>")
 
     new_id = int(context.args[0])
     if new_id in ALLOWED_USER_IDS:
@@ -96,15 +104,14 @@ async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Added user {new_id} to allowed list.")
 
 async def removeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    requester = update.effective_user.id
-    logger.info(f"[/removeuser] invoked by user {requester} args={context.args}")
-    if not is_authorized(requester):
-        await update.message.reply_text("🔒 You’re not allowed to remove users.")
-        return
+    user = update.effective_user
+    uid, uname = user.id, user.username
+    logger.info(f"[/removeuser] invoked by {uid} ({uname}) args={context.args}")
+    if not is_authorized(uid):
+        return await update.message.reply_text("🔒 You’re not allowed to remove users.")
 
     if len(context.args) != 1 or not context.args[0].isdigit():
-        await update.message.reply_text("Usage: /removeuser <user_id>")
-        return
+        return await update.message.reply_text("Usage: /removeuser <user_id>")
 
     rem_id = int(context.args[0])
     if rem_id not in ALLOWED_USER_IDS:
@@ -115,7 +122,7 @@ async def removeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Removed user {rem_id} from allowed list.")
 
 # ----------------------
-# 4) Help (admin-only)
+# 5) Help (admin-only)
 # ----------------------
 HELP_TEXT = (
     "🤖 *Bot Admin Help*\n\n"
@@ -124,14 +131,15 @@ HELP_TEXT = (
     "/start — restart the bot\n"
 )
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    logger.info(f"[/help] invoked by user {user_id}")
-    if user_id != ADMIN_ID:
+    user = update.effective_user
+    uid, uname = user.id, user.username
+    logger.info(f"[/help] invoked by {uid} ({uname})")
+    if uid != ADMIN_ID:
         return await update.message.reply_text("🔒 This command is for the bot admin only.")
     await update.message.reply_markdown(HELP_TEXT)
 
 # ----------------------
-# 5) Error Handler (global)
+# 6) Global Error Handler
 # ----------------------
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Exception while handling an update:", exc_info=context.error)
@@ -145,7 +153,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to send error alert: {e}")
 
 # ----------------------
-# 6) Helpers for MCQ Parsing (unchanged)
+# 7) MCQ Parsing Helpers (unchanged)
 # ----------------------
 def preprocess_text_for_questions(text):
     pattern = re.compile(r'([^\n])Question:\s*', re.IGNORECASE)
@@ -216,24 +224,25 @@ INSTRUCTION_MESSAGE = (
 )
 
 # ----------------------
-# 7) MCQ Handler + Secret-word onboarding
+# 8) MCQ Handler + Secret-word onboarding
 # ----------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user = update.effective_user
+    uid, uname = user.id, user.username
     text = update.message.text.strip()
-    logger.info(f"[message] from user {user_id}: {text}")
+    logger.info(f"[message] from {uid} ({uname}): {text}")
 
-    # 1) Secret-word flow for newcomers
-    if not is_authorized(user_id):
+    # Secret-word flow
+    if not is_authorized(uid):
         if text.lower() == 'admin':
-            ALLOWED_USER_IDS.append(user_id)
+            ALLOWED_USER_IDS.append(uid)
             save_allowed_users(ALLOWED_USER_IDS)
             await update.message.reply_text("✅ You’ve been granted access! You can now use the bot.")
         else:
             await update.message.reply_text("🚫 You are not authorized.")
         return
 
-    # 2) Authorized users → MCQ parsing
+    # Authorized → MCQ parsing
     mcqs = parse_multiple_mcqs(text)
     if not mcqs:
         return await update.message.reply_text(INSTRUCTION_MESSAGE)
@@ -257,37 +266,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 correct_option_id=correct_idx,
                 explanation=explanation or None
             )
-            logger.info(f"Poll sent: {question}")
+            logger.info(f"Poll sent for user {uid}: {question}")
         except Exception as e:
             logger.error(f"Failed to send poll: {e}")
             await update.message.reply_text(f"❌ Failed to send poll: {e}")
 
 # ----------------------
-# 8) Poll Tracking Handlers
+# 9) Poll Tracking Handlers
 # ----------------------
 async def handle_poll_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     poll: Poll = update.poll
     logger.info(
-        f"Poll updated: id={poll.id!r}, question={poll.question!r}, total_voters={poll.total_voter_count}"
+        f"Poll updated: id={poll.id}, question={poll.question}, total_voters={poll.total_voter_count}"
     )
 
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    answer = update.poll_answer
-    logger.info(
-        f"User {answer.user.id} answered poll {answer.poll_id!r}: options={answer.option_ids}"
-    )
+    ans = update.poll_answer
+    user = ans.user
+    logger.info(f"Poll answer by {user.id} ({user.username}): options={ans.option_ids}")
 
 # ----------------------
-# 9) Scheduling with JobQueue
+# 10) Scheduling with JobQueue
 # ----------------------
 async def reminder_callback(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     await context.bot.send_message(chat_id=job.chat_id, text=job.data)
 
 async def schedule_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    logger.info(f"[/schedule_reminder] invoked by user {user_id} args={context.args}")
-    if not is_authorized(user_id):
+    user = update.effective_user
+    uid, uname = user.id, user.username
+    logger.info(f"[/schedule_reminder] invoked by {uid} ({uname}) args={context.args}")
+    if not is_authorized(uid):
         return await update.message.reply_text("🚫 You are not authorized.")
 
     if len(context.args) < 2:
@@ -306,39 +315,42 @@ async def schedule_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         time=remind_time,
         chat_id=update.effective_chat.id,
         data=text,
-        name=f"reminder_{update.effective_chat.id}_{timestr}"
+        name=f"reminder_{uid}_{timestr}"
     )
     await update.message.reply_text(f"⏰ Reminder scheduled every day at {timestr}.")
 
 # ----------------------
-# 10) /start & Main
+# 11) /start & Main
 # ----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    logger.info(f"[/start] invoked by user {user_id}")
-    if not is_authorized(user_id):
-        await update.message.reply_text("🚫 You are not authorized.")
-        return
+    user = update.effective_user
+    uid, uname = user.id, user.username
+    logger.info(f"[/start] invoked by {uid} ({uname})")
+    if not is_authorized(uid):
+        return await update.message.reply_text("🚫 You are not authorized.")
 
     await update.message.reply_text(
         "🤖 Welcome to the enhanced MCQ Bot!\n\n" + INSTRUCTION_MESSAGE
     )
 
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .post_init(drop_webhook)
+        .build()
+    )
 
-    # Core handlers
+    # Command handlers
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('adduser', adduser))
     app.add_handler(CommandHandler('add', adduser))           # alias
     app.add_handler(CommandHandler('removeuser', removeuser))
-    app.add_handler(CommandHandler('help', help_command))     # admin-only help
+    app.add_handler(CommandHandler('help', help_command))
     app.add_handler(CommandHandler('schedule_reminder', schedule_reminder))
 
-    # catch-all for text → MCQ or secret-word onboarding
+    # Message & Poll handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Poll tracking
     app.add_handler(PollHandler(handle_poll_update))
     app.add_handler(PollAnswerHandler(handle_poll_answer))
 
@@ -346,7 +358,8 @@ def main():
     app.add_error_handler(error_handler)
 
     logger.info("Starting bot...")
-    app.run_polling()
+    # drop_pending_updates=True to skip backlog
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
